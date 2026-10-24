@@ -2,7 +2,8 @@
 id: TRX-72
 title: Change layers less often
 type: improvement
-status: todo
+status: in-progress
+assignee: claude
 priority: medium
 labels: [detailed-routing]
 layer: engine
