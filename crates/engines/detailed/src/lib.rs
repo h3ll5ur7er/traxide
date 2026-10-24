@@ -41,6 +41,11 @@ const ROUNDS_WITHOUT_GAIN: usize = 4;
 /// How much wider each window of a search that found no way grows.
 const WIDER_WINDOW: i32 = 4;
 
+/// How many times dearer a via is when routing is tidied: negotiating at that
+/// price costs connections and time, but once everything is routed a
+/// connection may well find a way with fewer vias among the rest (TRX-72).
+const TIDYING_VIA_COST: i64 = 4;
+
 pub struct Router<'a> {
     finder: Finder<'a>,
     /// One per thread: each search needs its own memory.
@@ -115,7 +120,7 @@ impl<'a> Router<'a> {
         events: &impl Publisher<Event>,
     ) -> RoutingResult {
         let first = self.negotiate(self.fresh(plan), plan, corridors, layout, cancel, events);
-        let best = if first.unrouted.is_empty()
+        let mut best = if first.unrouted.is_empty()
             || self.finder.profile.max_rip_ups == 0
             || cancel.is_cancelled()
             || self.is_past_deadline()
@@ -134,7 +139,53 @@ impl<'a> Router<'a> {
                 first
             }
         };
+        if !cancel.is_cancelled() && !self.is_past_deadline() {
+            self.tidy(&mut best, plan, layout, cancel);
+        }
         best.into_result(plan)
+    }
+
+    /// Routes each routed connection with vias once more, among the rest
+    /// without crossing them, with vias TIDYING_VIA_COST times dearer, and
+    /// keeps the route that has fewer vias. Batched as negotiation is, so the
+    /// routes are the same on any number of threads.
+    fn tidy(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let dearer = Profile {
+            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            ..self.finder.profile.clone()
+        };
+        let finder = Finder {
+            profile: &dearer,
+            ..self.finder
+        };
+        let mut queue: VecDeque<ConnectionId> = (attempt.routed.iter().enumerate())
+            .filter(|(_, routed)| routed.as_ref().is_some_and(|r| !r.vias.is_empty()))
+            .map(|(i, _)| ConnectionId::from_index(i))
+            .collect();
+        while !queue.is_empty() && !cancel.is_cancelled() && !self.is_past_deadline() {
+            let batch = self.next_batch(&mut queue, plan, None);
+            for &id in &batch {
+                layout.remove_route(id);
+            }
+            let found = self.find_all(finder, &batch, plan, None, layout, None);
+            for (&id, tidier) in batch.iter().zip(found) {
+                let Some(routes) = attempt.routed[id.index()].as_mut() else {
+                    continue;
+                };
+                if let Ok(tidier) = tidier
+                    && tidier.vias.len() < routes.vias.len()
+                {
+                    *routes = tidier;
+                }
+                layout.add_route(id, routes);
+            }
+        }
     }
 
     fn fresh(&self, plan: &Plan) -> Negotiated {
@@ -171,7 +222,8 @@ impl<'a> Router<'a> {
                 state.may_rip_up = false;
             }
             let batch = self.next_batch(&mut state.queue, plan, corridors);
-            let found = self.find_all(&batch, plan, corridors, layout, state.negotiation());
+            let finder = self.finder;
+            let found = self.find_all(finder, &batch, plan, corridors, layout, state.negotiation());
             let mut no_way = Vec::new();
             for (id, found) in batch.iter().copied().zip(found) {
                 match found {
@@ -254,7 +306,9 @@ impl<'a> Router<'a> {
                     history: &state.history,
                     present: Some(present),
                 };
-                let found = self.find_all(&batch, plan, corridors, layout, Some(negotiation));
+                let finder = self.finder;
+                let found =
+                    self.find_all(finder, &batch, plan, corridors, layout, Some(negotiation));
                 for (id, found) in batch.iter().copied().zip(found) {
                     let found = match found {
                         Ok(found) => Some(found),
@@ -431,13 +485,13 @@ impl<'a> Router<'a> {
     /// The route each connection of `batch` finds in `layout`, in batch order.
     fn find_all(
         &mut self,
+        finder: Finder,
         batch: &[ConnectionId],
         plan: &Plan,
         corridors: Option<&Corridors>,
         layout: &(impl LayoutAccess + Sync),
         negotiation: Option<search::Negotiation>,
     ) -> Vec<Result<Routes, NoRoute>> {
-        let finder = self.finder;
         let find = |scratch: &mut search::Scratch, id: ConnectionId| {
             let connection = plan.connections[id.index()];
             finder.find(scratch, id, connection, corridors, layout, negotiation)
