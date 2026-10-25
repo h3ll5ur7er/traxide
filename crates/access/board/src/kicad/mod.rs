@@ -27,6 +27,14 @@ pub fn parse_kicad_pcb(board: &str, rules: RuleFiles) -> Result<Design, BoardErr
     Ok(board::read(board, rules.project, rules.custom_rules)?.design)
 }
 
+/// A board file with routes added.
+#[derive(Debug)]
+pub struct WithRoutes {
+    pub text: String,
+    /// Whether the board has zones of copper, whose fills are now out of date.
+    pub has_copper_zones: bool,
+}
+
 /// The board file `board` with `routes` added, which were routed on `design`;
 /// `None` if `board` is no longer the board `design` was read from.
 pub fn add_routes(
@@ -34,7 +42,10 @@ pub fn add_routes(
     rules: RuleFiles,
     design: &Design,
     routes: &Routes,
-) -> Result<Option<String>, BoardError> {
+) -> Result<Option<WithRoutes>, BoardError> {
     let read = board::read(board, rules.project, rules.custom_rules)?;
-    Ok((read.design == *design).then(|| write::with_routes(board, &read, routes)))
+    Ok((read.design == *design).then(|| WithRoutes {
+        text: write::with_routes(board, &read, routes),
+        has_copper_zones: read.has_copper_zones,
+    }))
 }

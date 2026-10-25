@@ -313,6 +313,13 @@ fn summarise(report: &RouteReport, out: &mut dyn Write) -> ExitCode {
              Edit → Undo takes back the refill first; a second undo takes back the routes."
         );
     }
+    if report.zones_to_refill {
+        let _ = writeln!(
+            out,
+            "The board's copper zones keep the fills they came with. \
+             Refill them in KiCad (Edit → Fill All Zones) before checking or plotting the board."
+        );
+    }
     for warning in &report.warnings {
         let _ = writeln!(out, "Warning: {warning}");
     }
@@ -371,6 +378,10 @@ mod tests {
     use traxide_contracts::Verdict;
 
     fn report(zones_refilled: bool) -> RouteReport {
+        report_into(zones_refilled, false, traxide_routing::RUNNING_KICAD)
+    }
+
+    fn report_into(zones_refilled: bool, zones_to_refill: bool, output: &str) -> RouteReport {
         RouteReport {
             connections: 1,
             unrouted: Vec::new(),
@@ -380,8 +391,9 @@ mod tests {
             violations_before_routing: 0,
             cancelled: false,
             elapsed: Duration::ZERO,
-            output: PathBuf::from(traxide_routing::RUNNING_KICAD),
+            output: PathBuf::from(output),
             zones_refilled,
+            zones_to_refill,
             planes: Vec::new(),
             warnings: Vec::new(),
         }
@@ -399,5 +411,12 @@ mod tests {
         assert!(summary.contains("refilled"), "{summary}");
         assert!(summary.contains("second undo"), "{summary}");
         assert!(!self::summary(&report(false)).contains("undo"));
+    }
+
+    #[test]
+    fn tells_the_designer_to_refill_the_zones_of_a_board_file() {
+        let summary = summary(&report_into(false, true, "kb.routed.kicad_pcb"));
+        assert!(summary.contains("Fill All Zones"), "{summary}");
+        assert!(!self::summary(&report(false)).contains("Fill All Zones"));
     }
 }

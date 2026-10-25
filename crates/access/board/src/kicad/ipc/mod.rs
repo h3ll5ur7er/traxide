@@ -84,6 +84,7 @@ pub(crate) fn store_routes(
     }
     Ok(Stored {
         zones_refilled: board.has_copper_zones,
+        zones_to_refill: false,
     })
 }
 

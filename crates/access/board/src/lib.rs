@@ -88,6 +88,9 @@ pub struct Stored {
     /// The running KiCad refilled the board's copper zones around the routes,
     /// an undo step of its own: taking the routes back takes two undos.
     pub zones_refilled: bool,
+    /// The board file keeps the fills its copper zones came with, poured
+    /// round the copper before routing: the designer refills them in KiCad.
+    pub zones_to_refill: bool,
 }
 
 /// Stores `routes`, the copper routing added to `design`, which was read from
@@ -101,7 +104,7 @@ pub fn store_routes(
     if is_running_kicad(path) && is_running_kicad(board) {
         return kicad::ipc::store_routes(&kicad::ipc::Environment::of_process(), design, routes);
     }
-    let text = match (extension(path), extension(board)) {
+    let (text, zones_to_refill) = match (extension(path), extension(board)) {
         (Some("ses"), _) => {
             let name = path
                 .file_name()
@@ -121,11 +124,11 @@ pub fn store_routes(
                     .collect(),
             };
             everything.extend(routes.clone());
-            specctra::write_ses(&name, design, &everything)
+            (specctra::write_ses(&name, design, &everything), false)
         }
         (Some("kicad_pcb"), Some("kicad_pcb")) => {
             let beside = Beside::of(board)?;
-            let text = kicad::add_routes(&read(board)?, beside.rule_files(), design, routes)?
+            let routed = kicad::add_routes(&read(board)?, beside.rule_files(), design, routes)?
                 .ok_or_else(|| BoardError::Changed { path: board.into() })?;
             // KiCad finds a board's rules in the files of the same name.
             for (extension, rules) in [
@@ -139,7 +142,7 @@ pub fn store_routes(
                     write(&copy, rules)?;
                 }
             }
-            text
+            (routed.text, routed.has_copper_zones)
         }
         _ => {
             return Err(BoardError::UnsupportedFormat {
@@ -149,7 +152,10 @@ pub fn store_routes(
         }
     };
     write(path, &text)?;
-    Ok(Stored::default())
+    Ok(Stored {
+        zones_refilled: false,
+        zones_to_refill,
+    })
 }
 
 /// Stores `verdict`, found on `routes` of `design` in the file `source`, into

@@ -241,6 +241,40 @@ fn routes_a_kicad_board_into_a_copy_beside_it_with_its_project() {
     let routed = std::fs::read_to_string(&report.output).expect("stored");
     assert!(routed.matches("(segment").count() >= report.tracks && report.tracks > 0);
     assert!(folder.path().join("crossing.routed.kicad_pro").is_file());
+    assert!(!report.zones_to_refill, "the board has no zones");
+}
+
+#[test]
+fn a_kicad_board_file_with_copper_zones_keeps_their_fills_for_the_designer_to_refill() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let board = std::fs::read_to_string(fixture("crossing.kicad_pcb")).expect("fixture");
+    let zone = r#"	(zone (net "DOWN") (layer "B.Cu") (uuid "0d3f6b1e-9a52-4c1d-8e0b-6c7f2a9d4e10")
+		(connect_pads (clearance 0.5)) (min_thickness 0.25)
+		(fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+		(polygon (pts (xy 0 0) (xy 3 0) (xy 3 3) (xy 0 3))))
+"#;
+    let end = board
+        .trim_end()
+        .rfind(')')
+        .expect("the board's closing parenthesis");
+    std::fs::write(
+        folder.path().join("crossing.kicad_pcb"),
+        format!("{}{zone})\n", &board[..end]),
+    )
+    .expect("written");
+    std::fs::copy(
+        fixture("crossing.kicad_pro"),
+        folder.path().join("crossing.kicad_pro"),
+    )
+    .expect("copied");
+    let job = RouteJob {
+        input: folder.path().join("crossing.kicad_pcb"),
+        output: None,
+        ..job("crossing.kicad_pcb", folder.path())
+    };
+    let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
+    assert!(report.zones_to_refill, "{report:?}");
+    assert!(!report.zones_refilled);
 }
 
 #[test]

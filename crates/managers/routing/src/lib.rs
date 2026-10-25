@@ -60,6 +60,9 @@ pub struct RouteReport {
     /// The running KiCad refilled the board's copper zones around the routes,
     /// an undo step of its own: taking the routes back takes two undos.
     pub zones_refilled: bool,
+    /// The board file keeps the fills its copper zones came with: the
+    /// designer refills them in KiCad.
+    pub zones_to_refill: bool,
     /// The names of the layers kept free of tracks, as planes.
     pub planes: Vec<String>,
     /// What the reader found wrong with the board and read anyway.
@@ -334,6 +337,7 @@ pub fn route(
         elapsed: started.elapsed(),
         output,
         zones_refilled: stored.zones_refilled,
+        zones_to_refill: stored.zones_to_refill,
         planes: design
             .layers
             .iter()

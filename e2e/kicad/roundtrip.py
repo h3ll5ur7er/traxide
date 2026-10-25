@@ -23,6 +23,11 @@
       fills the board's unfilled copper zones and saves it, as a designer
       does before checking a routed board: an unfilled zone joins nothing.
 
+  python3 roundtrip.py refill-all ROUTED.kicad_pcb
+      fills all of the board's copper zones again and saves it: a board file
+      keeps the fills its zones came with, poured round the copper before
+      routing.
+
 KiCad's DRC (kicad-cli pcb drc) then judges the routed board.
 """
 
@@ -88,6 +93,16 @@ def refill(board_file: Path) -> None:
         pcbnew.SaveBoard(str(board_file), board)
 
 
+def refill_all(board_file: Path) -> None:
+    board = pcbnew.LoadBoard(str(board_file))
+    # A board file keeps the fills its zones came with, poured round the
+    # copper before routing; a designer refills them before checking.
+    zones = [zone for zone in board.Zones() if not zone.GetIsRuleArea()]
+    if zones:
+        pcbnew.ZONE_FILLER(board).Fill(zones)
+        pcbnew.SaveBoard(str(board_file), board)
+
+
 def print_stats(board) -> None:
     items = list(board.GetTracks())
     vias = [item for item in items if item.GetClass() == "PCB_VIA"]
@@ -116,5 +131,7 @@ if __name__ == "__main__":
             print_stats(pcbnew.LoadBoard(routed))
         case ["refill", routed]:
             refill(Path(routed))
+        case ["refill-all", routed]:
+            refill_all(Path(routed))
         case _:
             raise SystemExit(__doc__)
