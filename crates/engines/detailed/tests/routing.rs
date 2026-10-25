@@ -254,6 +254,26 @@ fn a_route_continues_a_fixed_lane_from_its_free_end_instead_of_leaving_it_dangli
 }
 
 #[test]
+fn a_route_goes_round_a_wall_rather_than_under_it_when_the_way_round_is_short() {
+    // Round the wall's end is some 5.4 mm further: less than two vias at the
+    // dearer price routing is tidied at, more than two at the price it
+    // negotiates at.
+    let design = DesignBuilder::new(20.0, 10.0)
+        .smd("A1", Some("A"), at(5.0, 5.0), 1.0, 0)
+        .smd("A2", Some("A"), at(15.0, 5.0), 1.0, 0)
+        .keepout(
+            wall(at(8.0, 1.0), at(12.0, 10.0)),
+            Some(0),
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, []);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn reports_a_connection_it_cannot_route() {
     let design = DesignBuilder::new(20.0, 10.0)
         .smd("A1", Some("A"), at(5.0, 5.0), 1.0, 0)

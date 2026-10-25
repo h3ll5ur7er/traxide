@@ -2,7 +2,7 @@
 id: TRX-74
 title: Keep the edge clearance from arcs, not only from their chords
 type: bug
-status: review
+status: done
 assignee: claude
 priority: medium
 labels: [kicad, rules, verification]
