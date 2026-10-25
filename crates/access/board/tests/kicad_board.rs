@@ -281,6 +281,28 @@ mod storing {
     }
 
     #[test]
+    fn a_design_that_routes_the_unlocked_wiring_again_is_stored_without_it() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let board = std::fs::read_to_string(fixture("crossing.kicad_pcb")).expect("fixture");
+        let end = board
+            .trim_end()
+            .rfind(')')
+            .expect("the board's closing parenthesis");
+        let wiring = "\t(segment (start 1 1) (end 2 1) (width 0.2) (layer \"F.Cu\") (locked yes) (net \"ACROSS\"))\n\
+                      \t(segment (start 1 2) (end 2 2) (width 0.2) (layer \"F.Cu\") (net \"ACROSS\"))\n";
+        let input = folder.path().join("wired.kicad_pcb");
+        std::fs::write(&input, format!("{}{wiring})\n", &board[..end])).expect("written");
+        let mut design = load_design(&input).expect("a valid board");
+        assert_eq!(design.existing.tracks.len(), 2);
+        design.existing = design.locked.clone();
+        let output = folder.path().join("routed.kicad_pcb");
+        store_routes(&output, &input, &design, &Routes::default()).expect("stored");
+        let stored = std::fs::read_to_string(&output).expect("stored");
+        assert!(stored.contains("(locked yes)"), "{stored}");
+        assert!(!stored.contains("(start 1 2)"), "{stored}");
+    }
+
+    #[test]
     fn routes_stored_into_a_board_file_are_its_copper_when_read_again() {
         let folder = tempfile::tempdir().expect("temporary folder");
         let input = Path::new(&fixture("crossing.kicad_pcb")).to_owned();

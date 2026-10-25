@@ -37,6 +37,9 @@ pub struct RouteJob {
     /// How long negotiation may go on, counted from the start of the job;
     /// what is still queued then routes once more without ripping anything up.
     pub time_limit: Option<Duration>,
+    /// Route the board's own wiring again, but for what the designer locked
+    /// or protected: a designer's tracks are moved only when asked.
+    pub reroute_existing: bool,
 }
 
 /// What a finished route job achieved.
@@ -108,6 +111,11 @@ pub enum RouteError {
     Profile(#[from] ProfileError),
     #[error("no net class named {name}; there are {}", known.join(", "))]
     UnknownNetClass { name: String, known: Vec<String> },
+    #[error(
+        "routing the board's own wiring again works on a board file or a Specctra design; \
+         in a running KiCad, delete the tracks to route again instead"
+    )]
+    RerouteInRunningKicad,
 }
 
 fn why_unrouted(
@@ -208,7 +216,13 @@ pub fn route(
     let started = Instant::now();
     let profile = traxide_profile_access::load_profile(&job.profile, job.profile_file.as_deref())?;
     events.publish(Event::StageStarted(Stage::Loading));
-    let design = traxide_board_access::load_design(&job.input)?;
+    let mut design = traxide_board_access::load_design(&job.input)?;
+    if job.reroute_existing {
+        if job.input.as_os_str() == RUNNING_KICAD {
+            return Err(RouteError::RerouteInRunningKicad);
+        }
+        design.existing = design.locked.clone();
+    }
     events.publish(Event::StageStarted(Stage::CompilingRules));
     let rules = traxide_rules::compile(
         &design,

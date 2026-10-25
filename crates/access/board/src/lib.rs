@@ -128,8 +128,19 @@ pub fn store_routes(
         }
         (Some("kicad_pcb"), Some("kicad_pcb")) => {
             let beside = Beside::of(board)?;
-            let routed = kicad::add_routes(&read(board)?, beside.rule_files(), design, routes)?
-                .ok_or_else(|| BoardError::Changed { path: board.into() })?;
+            let text = read(board)?;
+            let routed = match kicad::add_routes(&text, beside.rule_files(), design, routes)? {
+                Some(routed) => routed,
+                // A design that routes the board's unlocked wiring again holds
+                // only its locked copper: the board without the rest.
+                None => kicad::add_routes(
+                    &kicad::without_unlocked_wiring(&text),
+                    beside.rule_files(),
+                    design,
+                    routes,
+                )?
+                .ok_or_else(|| BoardError::Changed { path: board.into() })?,
+            };
             // KiCad finds a board's rules in the files of the same name.
             for (extension, rules) in [
                 (PROJECT, &beside.project),
