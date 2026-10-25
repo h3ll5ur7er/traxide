@@ -159,7 +159,8 @@ impl Kicad {
     /// Loads `out/ROUTED.kicad_pcb`, routed without KiCad, as KiCad opens it,
     /// and runs KiCad's DRC on it with every zone refilled, as a designer
     /// refills them before checking: a board file keeps the fills its zones
-    /// came with, poured round the copper before routing.
+    /// came with, poured round the copper before routing. Refilled by the
+    /// script, as KiCad 9's kicad-cli has no `--refill-zones`.
     pub fn judge_board(&self, root: &Path, out: &Path, routed: &str) -> Result<Judgement> {
         let report = format!("{routed}.drc.json");
         let printed = self.run(
@@ -167,7 +168,8 @@ impl Kicad {
             out,
             &format!(
                 "python3 roundtrip.py stats {{out}}/{routed}.kicad_pcb && \
-                 kicad-cli pcb drc --format json --severity-error --refill-zones -o {{out}}/{report} {{out}}/{routed}.kicad_pcb"
+                 python3 roundtrip.py refill-all {{out}}/{routed}.kicad_pcb && \
+                 kicad-cli pcb drc --format json --severity-error -o {{out}}/{report} {{out}}/{routed}.kicad_pcb"
             ),
         )?;
         judged(&printed, &out.join(report))
