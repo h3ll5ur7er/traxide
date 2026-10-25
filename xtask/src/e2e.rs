@@ -150,7 +150,7 @@ fn through_running_kicad(
     );
     running.route_with_the_plugin(&before)?;
     running.save()?;
-    let judgement = kicad.judge_board(root, &running.project, recipe)?;
+    let judgement = kicad.judge_saved_in_kicad(root, &running.project, recipe)?;
     ensure!(
         judgement.is_clean() && judgement.tracks > 0,
         "routed in KiCad and saved, KiCad's DRC found {} violations and {} unconnected items in {} tracks:\n  {}",
