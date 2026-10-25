@@ -46,6 +46,11 @@ const WIDER_WINDOW: i32 = 4;
 /// connection may well find a way with fewer vias among the rest (TRX-72).
 const TIDYING_VIA_COST: i64 = 4;
 
+/// How boldly a search heads for its target when routing is tidied: any way
+/// with fewer vias will do, and the profile's weight, searching for the
+/// cheapest, made tidying take as long as routing on small boards.
+const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
+
 pub struct Router<'a> {
     finder: Finder<'a>,
     /// One per thread: each search needs its own memory.
@@ -145,9 +150,21 @@ impl<'a> Router<'a> {
         best.into_result(plan)
     }
 
-    /// Routes each routed connection with vias once more, among the rest
-    /// without crossing them, with vias TIDYING_VIA_COST times dearer, and
-    /// keeps the route that has fewer vias. Batched as negotiation is, so the
+    /// The vias a connection needs at least: one between pads that share no
+    /// layer tracks may run on.
+    fn fewest_vias(&self, connection: Connection) -> usize {
+        let design = self.finder.design;
+        let (from, to) = (design.pad(connection.from), design.pad(connection.to));
+        let shared = from
+            .copper
+            .iter()
+            .any(|c| design.layers[c.layer.index()].routable && to.is_on(c.layer));
+        usize::from(!shared)
+    }
+
+    /// Routes each routed connection with more vias than it needs once more,
+    /// among the rest without crossing them, with vias TIDYING_VIA_COST times
+    /// dearer, and keeps the route that has fewer vias. Batched as negotiation is, so the
     /// routes are the same on any number of threads.
     fn tidy(
         &mut self,
@@ -158,6 +175,7 @@ impl<'a> Router<'a> {
     ) {
         let dearer = Profile {
             via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
             ..self.finder.profile.clone()
         };
         let finder = Finder {
@@ -165,7 +183,11 @@ impl<'a> Router<'a> {
             ..self.finder
         };
         let mut queue: VecDeque<ConnectionId> = (attempt.routed.iter().enumerate())
-            .filter(|(_, routed)| routed.as_ref().is_some_and(|r| !r.vias.is_empty()))
+            .filter(|&(i, routed)| {
+                routed
+                    .as_ref()
+                    .is_some_and(|routes| routes.vias.len() > self.fewest_vias(plan.connections[i]))
+            })
             .map(|(i, _)| ConnectionId::from_index(i))
             .collect();
         while !queue.is_empty() && !cancel.is_cancelled() && !self.is_past_deadline() {
