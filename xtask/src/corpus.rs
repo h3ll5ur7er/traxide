@@ -52,7 +52,10 @@ pub fn run(args: &[String]) -> Result<()> {
             Some(project) => corpus.route_project(&project)?,
             None => corpus.route_fixture(board)?,
         };
-        eprintln!("{}", row.cells(row.author.is_some()));
+        eprintln!(
+            "{}",
+            row.cells(row.author.is_some(), row.kicad_drc.is_some())
+        );
         rows.push(row);
     }
     let record = Record {
@@ -115,6 +118,7 @@ impl Corpus<'_> {
                 judge_session(&traxide_session)
             })?,
             freerouting: None,
+            kicad_drc: None,
         };
         if let Some(command) = self.freerouting {
             let freerouting_session = session("freerouting");
@@ -171,11 +175,45 @@ impl Corpus<'_> {
                 judge_board(&traxide_board)
             })?,
             freerouting: None,
+            kicad_drc: None,
         };
         if let Some(command) = self.freerouting {
             row.freerouting = Some(self.freerouting_on_project(command, &folder)?);
         }
+        row.kicad_drc = Some(self.kicad_drc(&folder, &committed, &row)?);
         Ok(row)
+    }
+
+    /// What KiCad's DRC, with the zones refilled, finds on each routing of a
+    /// project's board: traxide's, Freerouting's and its author's. Each is
+    /// judged as a copy with the board's rules beside it, as refilling saves
+    /// the board.
+    fn kicad_drc(&self, folder: &Path, committed: &Path, row: &Row) -> Result<String> {
+        let with_rules = |from: &Path, stem: &str| -> Result<()> {
+            for extension in RULE_FILES {
+                let rules = from.with_extension(extension);
+                if rules.exists() {
+                    std::fs::copy(&rules, folder.join(stem).with_extension(extension))?;
+                }
+            }
+            Ok(())
+        };
+        let mut verdicts = Vec::new();
+        let mut judge = |router: &str, stem: &str| {
+            let verdict = drc_verdict(&self.kicad.judge_board(self.root, folder, stem));
+            verdicts.push(format!("{router}: {verdict}"));
+        };
+        if matches!(row.traxide, Attempt::Judged { .. }) {
+            judge("traxide", "traxide");
+        }
+        if matches!(row.freerouting, Some(Attempt::Judged { .. })) {
+            with_rules(&folder.join("stripped.kicad_pcb"), "freerouting")?;
+            judge("Freerouting", "freerouting");
+        }
+        std::fs::copy(committed, folder.join("author.kicad_pcb"))?;
+        with_rules(committed, "author")?;
+        judge("author", "author");
+        Ok(verdicts.join("; "))
     }
 
     /// Freerouting on the DSN that KiCad exports of `FOLDER/stripped.kicad_pcb`,
@@ -315,6 +353,29 @@ struct Row {
     author: Option<Judgement>,
     traxide: Attempt,
     freerouting: Option<Attempt>,
+    /// What KiCad's DRC finds on a KiCad project's routings.
+    kicad_drc: Option<String>,
+}
+
+/// KiCad's errors by kind and its missing connections, or why it judged nothing.
+fn drc_verdict(judged: &Result<kicad::Judgement>) -> String {
+    let judgement = match judged {
+        Ok(judgement) => judgement,
+        Err(why) => return format!("not judged: {}", first_line(&why.to_string())),
+    };
+    if judgement.is_clean() {
+        return "clean".into();
+    }
+    let kinds: Vec<String> = judgement
+        .violation_kinds
+        .iter()
+        .map(|(kind, n)| format!("{kind} {n}"))
+        .collect();
+    let errors = match judgement.violations.len() {
+        0 => "no errors".to_owned(),
+        n => format!("{n} errors ({})", kinds.join(", ")),
+    };
+    format!("{errors}, {} unconnected", judgement.unconnected.len())
 }
 
 /// What `traxide check --json` says about a board and its routes.
@@ -442,7 +503,7 @@ impl Row {
 
     /// The row's cells, with one for the author's routing when the table
     /// has that column.
-    fn cells(&self, with_author: bool) -> String {
+    fn cells(&self, with_author: bool, with_kicad: bool) -> String {
         let mut cells = vec![self.board.clone(), self.describe(&self.traxide)];
         if let Some(freerouting) = &self.freerouting {
             cells.push(self.describe(freerouting));
@@ -452,6 +513,9 @@ impl Row {
                 self.author
                     .map_or_else(|| "—".to_owned(), |author| self.result(author)),
             );
+        }
+        if with_kicad {
+            cells.push(self.kicad_drc.clone().unwrap_or_else(|| "—".to_owned()));
         }
         format!("| {} |", cells.join(" | "))
     }
@@ -480,6 +544,7 @@ impl Row {
 
 fn table(rows: &[Row], with_freerouting: bool) -> String {
     let with_author = rows.iter().any(|row| row.author.is_some());
+    let with_kicad = rows.iter().any(|row| row.kicad_drc.is_some());
     let mut columns = vec!["Board", "traxide"];
     if with_freerouting {
         columns.push("Freerouting");
@@ -487,11 +552,14 @@ fn table(rows: &[Row], with_freerouting: bool) -> String {
     if with_author {
         columns.push("Routed by its author");
     }
+    if with_kicad {
+        columns.push("KiCad's DRC");
+    }
     let mut lines = vec![
         format!("| {} |", columns.join(" | ")),
         format!("|{}", " --- |".repeat(columns.len())),
     ];
-    lines.extend(rows.iter().map(|row| row.cells(with_author)));
+    lines.extend(rows.iter().map(|row| row.cells(with_author, with_kicad)));
     lines.push(String::new());
     lines.push(totals("traxide", rows.iter().map(|r| (r, &r.traxide))));
     if with_freerouting {
@@ -601,9 +669,10 @@ mod tests {
             },
             freerouting: None,
             author: None,
+            kicad_drc: None,
         };
         assert_eq!(
-            row.cells(false),
+            row.cells(false, false),
             "| b | 1.0 s, 4 of 4 nets, 0 rules broken |"
         );
         assert_eq!(
@@ -656,6 +725,7 @@ mod tests {
                 judgement: judged(0),
             },
             freerouting: Some(Attempt::Failed { why: "no".into() }),
+            kicad_drc: None,
         };
         let table = table(
             &[row("tokenboard-kb", Some(judged(1))), row("fixture", None)],
@@ -669,6 +739,75 @@ mod tests {
                 "| --- | --- | --- | --- |",
                 "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken | failed: no | 8 of 9 nets, 0 rules broken |",
                 "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken | failed: no | — |",
+            ]
+        );
+    }
+
+    fn drc(kinds: &[(&str, usize)], unconnected: usize) -> kicad::Judgement {
+        kicad::Judgement {
+            violations: kinds
+                .iter()
+                .flat_map(|&(kind, n)| std::iter::repeat_n(kind.to_owned(), n))
+                .collect(),
+            violation_kinds: kinds.iter().map(|&(k, n)| (k.to_owned(), n)).collect(),
+            unconnected: vec!["pad".into(); unconnected],
+            tracks: 0,
+            vias: 0,
+            length_mm: 0.0,
+            zones: 0,
+            filled_zones: 0,
+        }
+    }
+
+    #[test]
+    fn kicads_drc_names_its_errors_by_kind_and_its_missing_connections() {
+        assert_eq!(drc_verdict(&Ok(drc(&[], 0))), "clean");
+        assert_eq!(
+            drc_verdict(&Ok(drc(
+                &[("clearance", 2), ("copper_edge_clearance", 1)],
+                1
+            ))),
+            "3 errors (clearance 2, copper_edge_clearance 1), 1 unconnected"
+        );
+        assert_eq!(
+            drc_verdict(&Err(anyhow!("KiCad failed: no docker\nmore"))),
+            "not judged: KiCad failed: no docker"
+        );
+    }
+
+    #[test]
+    fn a_kicad_project_shows_what_kicads_drc_finds_beside_traxides_check() {
+        let judged = Judgement {
+            nets: 9,
+            incomplete_nets: 0,
+            violations: 0,
+        };
+        let row = |board: &str, kicad_drc: Option<&str>| Row {
+            board: board.into(),
+            before: Some(judged),
+            author: Some(judged),
+            traxide: Attempt::Judged {
+                seconds: 2.0,
+                judgement: judged,
+            },
+            freerouting: None,
+            kicad_drc: kicad_drc.map(str::to_owned),
+        };
+        let table = table(
+            &[
+                row("tokenboard-kb", Some("traxide: clean; author: clean")),
+                row("fixture", None),
+            ],
+            false,
+        );
+        let lines: Vec<&str> = table.lines().take(4).collect();
+        assert_eq!(
+            lines,
+            [
+                "| Board | traxide | Routed by its author | KiCad's DRC |",
+                "| --- | --- | --- | --- |",
+                "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken | 9 of 9 nets, 0 rules broken | traxide: clean; author: clean |",
+                "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken | 9 of 9 nets, 0 rules broken | — |",
             ]
         );
     }
