@@ -146,6 +146,7 @@ impl<'a> Router<'a> {
         };
         if !cancel.is_cancelled() && !self.is_past_deadline() {
             self.tidy(&mut best, plan, layout, cancel);
+            self.continue_lanes(&mut best, plan, layout, cancel);
         }
         best.into_result(plan)
     }
@@ -202,6 +203,54 @@ impl<'a> Router<'a> {
                 *routes = tidier;
             }
             layout.add_route(id, routes);
+        }
+    }
+
+    /// Routes each routed connection once more whose pad has lanes of the
+    /// board's wiring that no route of its net continues, reaching the pad at
+    /// their free ends only, among the rest without crossing them: such a
+    /// lane is left a dangling stub where a route joins its pad elsewhere,
+    /// being shorter. Where no such way is found, the route stays.
+    fn continue_lanes(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let design = self.finder.design;
+        for i in 0..attempt.routed.len() {
+            if cancel.is_cancelled() || self.is_past_deadline() {
+                return;
+            }
+            let connection = plan.connections[i];
+            if attempt.routed[i].is_none() {
+                continue;
+            }
+            let continued = |at: Point| {
+                (plan.connections.iter().zip(&attempt.routed))
+                    .filter(|(other, _)| other.net == connection.net)
+                    .filter_map(|(_, routed)| routed.as_ref())
+                    .any(|routes| reaches(routes, at))
+            };
+            let leaves_a_lane_dangling = [connection.from, connection.to].iter().any(|&pad| {
+                let ends = lanes::free_ends(design, design.pad(pad));
+                !ends.is_empty() && !ends.iter().any(|end| continued(end.at))
+            });
+            if !leaves_a_lane_dangling {
+                continue;
+            }
+            let id = ConnectionId::from_index(i);
+            layout.remove_route(id);
+            if let Ok(by_lanes) =
+                self.finder
+                    .search_by_lanes(&mut self.scratches[0], connection, layout)
+            {
+                attempt.routed[i] = Some(by_lanes);
+            }
+            if let Some(routes) = &attempt.routed[i] {
+                layout.add_route(id, routes);
+            }
         }
     }
 
@@ -646,12 +695,46 @@ impl Finder<'_> {
             corridor,
         );
         let steps = search.run(scratch)?;
-        Ok(path::to_routes(
-            &steps,
+        Ok(self.routes(&steps, connection))
+    }
+
+    /// A route reaching the pads with lanes of the board's wiring only at the
+    /// lanes' free ends, crossing nothing routed.
+    fn search_by_lanes(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+    ) -> Result<Routes, NoRoute> {
+        let search = search::Search::new(
+            self.design,
+            self.rules,
+            self.profile,
+            connection,
+            layout,
+            None,
+            None,
+        );
+        let steps = search.by_lanes_only().run(scratch)?;
+        Ok(self.routes(&steps, connection))
+    }
+
+    fn routes(&self, steps: &[path::Step], connection: Connection) -> Routes {
+        path::to_routes(
+            steps,
             connection.net,
             self.rules.track_width(connection.net),
-        ))
+        )
     }
+}
+
+/// Whether a track of `routes` ends at `at`, or a via stands there.
+fn reaches(routes: &Routes, at: Point) -> bool {
+    routes
+        .tracks
+        .iter()
+        .any(|t| t.path.first() == Some(&at) || t.path.last() == Some(&at))
+        || routes.vias.iter().any(|v| v.position == at)
 }
 
 /// What one way of negotiating routed, and why the rest is not.
