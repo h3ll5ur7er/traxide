@@ -15,7 +15,7 @@ mod search;
 
 use search::NoRoute;
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use traxide_contracts::geometry::{Point, Rect, Segment};
@@ -57,6 +57,10 @@ pub struct Router<'a> {
     scratches: Vec<search::Scratch>,
     /// When negotiation stops ripping up, whatever it would still gain.
     deadline: Option<Instant>,
+    /// Whether the board's own copper cuts each connection asked about off,
+    /// which no routing changes: a search for one cut off floods all it can
+    /// reach, again on every attempt.
+    cut_off: HashMap<Connection, bool>,
 }
 
 impl std::fmt::Debug for Router<'_> {
@@ -78,6 +82,7 @@ impl<'a> Router<'a> {
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
+            cut_off: HashMap::new(),
         }
     }
 
@@ -146,6 +151,7 @@ impl<'a> Router<'a> {
         };
         if !cancel.is_cancelled() && !self.is_past_deadline() {
             self.tidy(&mut best, plan, layout, cancel);
+            self.continue_lanes(&mut best, plan, layout, cancel);
         }
         best.into_result(plan)
     }
@@ -202,6 +208,54 @@ impl<'a> Router<'a> {
                 *routes = tidier;
             }
             layout.add_route(id, routes);
+        }
+    }
+
+    /// Routes each routed connection once more whose pad has lanes of the
+    /// board's wiring that no route of its net continues, reaching the pad at
+    /// their free ends only, among the rest without crossing them: such a
+    /// lane is left a dangling stub where a route joins its pad elsewhere,
+    /// being shorter. Where no such way is found, the route stays.
+    fn continue_lanes(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let design = self.finder.design;
+        for i in 0..attempt.routed.len() {
+            if cancel.is_cancelled() || self.is_past_deadline() {
+                return;
+            }
+            let connection = plan.connections[i];
+            if attempt.routed[i].is_none() {
+                continue;
+            }
+            let continued = |at: Point| {
+                (plan.connections.iter().zip(&attempt.routed))
+                    .filter(|(other, _)| other.net == connection.net)
+                    .filter_map(|(_, routed)| routed.as_ref())
+                    .any(|routes| reaches(routes, at))
+            };
+            let leaves_a_lane_dangling = [connection.from, connection.to].iter().any(|&pad| {
+                let ends = lanes::free_ends(design, design.pad(pad));
+                !ends.is_empty() && !ends.iter().any(|end| continued(end.at))
+            });
+            if !leaves_a_lane_dangling {
+                continue;
+            }
+            let id = ConnectionId::from_index(i);
+            layout.remove_route(id);
+            if let Ok(by_lanes) =
+                self.finder
+                    .search_by_lanes(&mut self.scratches[0], connection, layout)
+            {
+                attempt.routed[i] = Some(by_lanes);
+            }
+            if let Some(routes) = &attempt.routed[i] {
+                layout.add_route(id, routes);
+            }
         }
     }
 
@@ -266,14 +320,14 @@ impl<'a> Router<'a> {
                     unrouted.push(id);
                     continue;
                 }
+                if self.is_cut_off(connection, layout) {
+                    cut_off.push(connection);
+                    unrouted.push(id);
+                    continue;
+                }
                 match self.find_wider(connection, layout, state.negotiation()) {
                     Some(found) => state.commit(self.finder.design, layout, id, found, &[], events),
-                    None => {
-                        if self.is_cut_off(connection, layout) {
-                            cut_off.push(connection);
-                        }
-                        unrouted.push(id);
-                    }
+                    None => unrouted.push(id),
                 }
             }
         }
@@ -329,7 +383,11 @@ impl<'a> Router<'a> {
                         Err(NoRoute::Blocked { .. }) => None,
                         Err(NoRoute::NotFound) => {
                             let connection = plan.connections[id.index()];
-                            self.find_wider(connection, layout, Some(negotiation))
+                            if self.is_cut_off(connection, layout) {
+                                None
+                            } else {
+                                self.find_wider(connection, layout, Some(negotiation))
+                            }
                         }
                     };
                     match found {
@@ -440,14 +498,17 @@ impl<'a> Router<'a> {
     }
 
     /// Whether the board's own copper, keepouts and edge leave no way at all
-    /// between the pads of `connection`, whatever was routed.
+    /// between the pads of `connection`, whatever was routed; searched once.
     fn is_cut_off(&mut self, connection: Connection, layout: &impl LayoutAccess) -> bool {
+        if let Some(&known) = self.cut_off.get(&connection) {
+            return known;
+        }
         let board = self.finder.design.outline.bounds();
         let whole_board = Profile {
             detour_margin: (board.max.x - board.min.x).max(board.max.y - board.min.y),
             ..self.finder.profile.clone()
         };
-        search::Search::new(
+        let cut_off = search::Search::new(
             self.finder.design,
             self.finder.rules,
             &whole_board,
@@ -458,7 +519,9 @@ impl<'a> Router<'a> {
         )
         .through_routed_copper()
         .run(&mut self.scratches[0])
-        .is_err()
+        .is_err();
+        self.cut_off.insert(connection, cut_off);
+        cut_off
     }
 
     /// Takes up to the profile's `batch_size` connections from the front of
@@ -505,9 +568,12 @@ impl<'a> Router<'a> {
         layout: &(impl LayoutAccess + Sync),
         negotiation: Option<search::Negotiation>,
     ) -> Vec<Result<Routes, NoRoute>> {
-        let finder = self.finder;
+        let (finder, known) = (self.finder, &self.cut_off);
         let find = |scratch: &mut search::Scratch, id: ConnectionId| {
             let connection = plan.connections[id.index()];
+            if known.get(&connection) == Some(&true) {
+                return Err(NoRoute::NotFound);
+            }
             finder.find(scratch, id, connection, corridors, layout, negotiation)
         };
         let workers = self.scratches.len().min(batch.len());
@@ -646,12 +712,46 @@ impl Finder<'_> {
             corridor,
         );
         let steps = search.run(scratch)?;
-        Ok(path::to_routes(
-            &steps,
+        Ok(self.routes(&steps, connection))
+    }
+
+    /// A route reaching the pads with lanes of the board's wiring only at the
+    /// lanes' free ends, crossing nothing routed.
+    fn search_by_lanes(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+    ) -> Result<Routes, NoRoute> {
+        let search = search::Search::new(
+            self.design,
+            self.rules,
+            self.profile,
+            connection,
+            layout,
+            None,
+            None,
+        );
+        let steps = search.by_lanes_only().run(scratch)?;
+        Ok(self.routes(&steps, connection))
+    }
+
+    fn routes(&self, steps: &[path::Step], connection: Connection) -> Routes {
+        path::to_routes(
+            steps,
             connection.net,
             self.rules.track_width(connection.net),
-        ))
+        )
     }
+}
+
+/// Whether a track of `routes` ends at `at`, or a via stands there.
+fn reaches(routes: &Routes, at: Point) -> bool {
+    routes
+        .tracks
+        .iter()
+        .any(|t| t.path.first() == Some(&at) || t.path.last() == Some(&at))
+        || routes.vias.iter().any(|v| v.position == at)
 }
 
 /// What one way of negotiating routed, and why the rest is not.

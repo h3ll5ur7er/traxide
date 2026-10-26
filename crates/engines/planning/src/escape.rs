@@ -55,7 +55,9 @@ impl Escaped {
     }
 
     /// The stubs that a routed connection starts from: a stub all of whose
-    /// connections are among `unrouted` would only dangle.
+    /// connections are among `unrouted` would only dangle, and one that lies
+    /// on a lane of the board's wiring would end dangling in its middle, as
+    /// the lane leads the pin out already.
     pub fn copper_used(&self, unrouted: &[Connection]) -> Routes {
         let tracks = self
             .escapes
@@ -68,12 +70,27 @@ impl Escaped {
                     .iter()
                     .any(|c| (c.from == end || c.to == end) && !unrouted.contains(c))
             })
-            .map(|(_, escape)| escape.stub.clone())
+            .map(|(_, escape)| &escape.stub)
+            .filter(|stub| !self.is_wired_along(stub))
+            .cloned()
             .collect();
         Routes {
             tracks,
             vias: Vec::new(),
         }
+    }
+
+    /// Whether a track of the board's wiring of the stub's net covers it.
+    fn is_wired_along(&self, stub: &Track) -> bool {
+        self.design.existing.tracks.iter().any(|track| {
+            track.net == stub.net
+                && track.layer == stub.layer
+                && track.width >= stub.width
+                && track.path.windows(2).any(|pair| {
+                    let shape = Shape::track(Segment::new(pair[0], pair[1]), track.width);
+                    stub.path.iter().all(|&p| shape.nearest_point(p) == p)
+                })
+        })
     }
 
     /// Adds the pad at the end of `stub` that connections of `pin` leave from.
@@ -466,6 +483,23 @@ mod tests {
             .filter(|c| c.net == n1)
             .collect();
         let copper = escaped.copper_used(&failed);
+        assert_eq!(copper.tracks.len(), 15);
+        assert!(copper.tracks.iter().all(|t| t.net != n1));
+    }
+
+    #[test]
+    fn a_stub_that_the_board_s_wiring_covers_is_left_out() {
+        // A lane of N1's own leads out of U1-1 where its stub would.
+        let mut design = chip(8).build();
+        design.existing.tracks.push(traxide_contracts::Track {
+            net: design.net_named("N1"),
+            layer: traxide_contracts::LayerId(0),
+            width: mm(0.2),
+            path: vec![at(10.0, 8.5), at(10.0, 5.0)],
+        });
+        let escaped = escaped(&design);
+        let n1 = escaped.design.net_named("N1");
+        let copper = escaped.copper_used(&[]);
         assert_eq!(copper.tracks.len(), 15);
         assert!(copper.tracks.iter().all(|t| t.net != n1));
     }

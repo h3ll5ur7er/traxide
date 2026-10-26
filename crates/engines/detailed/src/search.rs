@@ -179,6 +179,9 @@ pub(crate) struct Search<'a, L> {
     negotiation: Option<Negotiation<'a>>,
     /// Whether routed copper is looked through, to tell what fixed copper alone blocks.
     ignores_routed_copper: bool,
+    /// Whether a pad with lanes of the board's wiring is reached only at their
+    /// free ends.
+    by_lanes_only: bool,
     /// The profile's heuristic weight in thousandths, so ranking stays in integers.
     weight_per_mille: i64,
     /// The corridor global routing planned for this connection, if any.
@@ -216,6 +219,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 .max(pitch),
             negotiation,
             ignores_routed_copper: false,
+            by_lanes_only: false,
             corridor,
             weight_per_mille: (profile.heuristic_weight * 1000.0).round() as i64,
         }
@@ -227,6 +231,15 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         Self {
             ignores_routed_copper: true,
             negotiation: None,
+            ..*self
+        }
+    }
+
+    /// The same search, reaching a pad with lanes only at their free ends,
+    /// which then leaves none of them a dangling stub.
+    pub(crate) fn by_lanes_only(&self) -> Self {
+        Self {
+            by_lanes_only: true,
             ..*self
         }
     }
@@ -736,12 +749,18 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     /// along the pad's axes, for a centre off the grid.
     ///
     /// A pad with a lane of the board's wiring is reached at the lane's free
-    /// end too, which leaves no dangling stub.
+    /// end too, which leaves no dangling stub; searching by lanes only, there
+    /// alone where the lanes leave a way in.
     fn access(&self, pad: &Pad) -> Vec<Way> {
-        let mut ways = self.ways_onto(pad);
-        for end in lanes::free_ends(self.design, pad) {
-            ways.extend(self.ways_into_free_end(&end));
+        let into_lanes: Vec<Way> = lanes::free_ends(self.design, pad)
+            .iter()
+            .flat_map(|end| self.ways_into_free_end(end))
+            .collect();
+        if self.by_lanes_only && !into_lanes.is_empty() {
+            return into_lanes;
         }
+        let mut ways = self.ways_onto(pad);
+        ways.extend(into_lanes);
         ways
     }
 
