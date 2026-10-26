@@ -2,7 +2,7 @@
 id: TRX-73
 title: Continue fixed wiring from its free end
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: low
 labels: [detailed-routing, dsn]
