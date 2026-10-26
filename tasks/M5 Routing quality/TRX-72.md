@@ -32,3 +32,5 @@ From the TokenBoard report ([[Research/TokenBoard-report]]): traxide placed 547 
 | Issue178, complete | 564 vias, 24 s | 518 vias, 34 s |
 
 The whole corpus passes the gate (0 regressions, 8 improvements, 50 complete). Freerouting's 194 vias on the report's board stay out of reach this way: they would need the layout negotiation settles on to change, such as preferred directions per layer, which want tuning first.
+
+**Fixed after the merge:** tidying in batches broke a rule on Issue283 (CI, PR #18): a clearance between tracks of Net-(U1-Pad24) and Net-(J13-Pad1). Batches keep apart what connections may search, not what they routed, and a route found in a wider window ([[TRX-55]]) reaches beyond that: taken out together with a neighbour whose window was apart, the neighbour's tidier route ran where the wide route lay, and the wide route came back. Tidying is now one connection at a time; batched, it had saved some 3 %. Plane joins after routing ([[TRX-67]]) also route in a layout of their own now, holding the routes as the board's copper: sharing the routing's layout, their plan's ids named the routing's connections, and tidying them took those out.

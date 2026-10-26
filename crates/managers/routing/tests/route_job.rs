@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use traxide_contracts::{Event, Stage};
 use traxide_events::{CancelToken, Silent};
-use traxide_routing::{RouteJob, Unroutable, route};
+use traxide_routing::{RouteJob, RouteReport, Unroutable, route};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -21,6 +21,7 @@ fn job(input: &str, output: &std::path::Path) -> RouteJob {
         unrouted_net_classes: Vec::new(),
         drc_report: None,
         time_limit: None,
+        reroute_existing: false,
     }
 }
 
@@ -386,4 +387,59 @@ fn pads_of_a_net_with_a_plane_join_it_by_vias_beside_them() {
     assert_eq!((report.connections, report.unrouted.len()), (2, 0));
     assert!(report.verdict.is_clean(), "{:?}", report.verdict);
     assert_eq!(report.vias, 4, "one beside each GND pad");
+}
+
+/// two-nets.dsn with a ring of the net Across's wiring round R3 on both
+/// layers, typed `kind`: Down cannot leave R3 while it stays.
+fn ringed_board(folder: &std::path::Path, kind: &str) -> PathBuf {
+    let ring = "13000 -1500 17000 -1500 17000 -6500 13000 -6500 13000 -1500";
+    let wiring = format!(
+        "(wiring (wire (path F.Cu 200 {ring}) (net Across) (type {kind})) \
+           (wire (path B.Cu 200 {ring}) (net Across) (type {kind})))"
+    );
+    let board = std::fs::read_to_string(fixture("two-nets.dsn"))
+        .expect("fixture")
+        .replace("(wiring)", &wiring);
+    let file = folder.join(format!("ringed-{kind}.dsn"));
+    std::fs::write(&file, board).expect("written");
+    file
+}
+
+fn route_ringed(kind: &str, reroute_existing: bool) -> (RouteReport, String) {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let session = folder.path().join("ringed.ses");
+    let job = RouteJob {
+        input: ringed_board(folder.path(), kind),
+        reroute_existing,
+        ..job("two-nets.dsn", &session)
+    };
+    let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
+    (report, std::fs::read_to_string(&session).expect("stored"))
+}
+
+#[test]
+fn the_boards_unprotected_wiring_stays_as_it_is_unless_asked_to_route_it_again() {
+    let (kept, _) = route_ringed("route", false);
+    assert!(
+        kept.unrouted.iter().any(|u| u.net == "Down"),
+        "{:?}",
+        kept.unrouted
+    );
+    let (rerouted, session) = route_ringed("route", true);
+    assert!(rerouted.unrouted.is_empty(), "{:?}", rerouted.unrouted);
+    // A corner of the ring, in the session's steps of 0.1 µm.
+    assert!(
+        !session.contains("170000 -65000"),
+        "the ring is gone: {session}"
+    );
+}
+
+#[test]
+fn protected_wiring_stays_even_when_asked_to_route_the_rest_again() {
+    let (report, _) = route_ringed("protect", true);
+    assert!(
+        report.unrouted.iter().any(|u| u.net == "Down"),
+        "{:?}",
+        report.unrouted
+    );
 }

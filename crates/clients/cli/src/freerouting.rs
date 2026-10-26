@@ -98,6 +98,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation> {
             unrouted_net_classes,
             drc_report,
             time_limit: None,
+            reroute_existing: false,
         }),
         warnings,
     })

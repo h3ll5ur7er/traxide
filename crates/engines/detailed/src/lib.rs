@@ -164,8 +164,9 @@ impl<'a> Router<'a> {
 
     /// Routes each routed connection with more vias than it needs once more,
     /// among the rest without crossing them, with vias TIDYING_VIA_COST times
-    /// dearer, and keeps the route that has fewer vias. Batched as negotiation is, so the
-    /// routes are the same on any number of threads.
+    /// dearer, and keeps the route that has fewer vias. One at a time: batches
+    /// keep apart what connections may search, not what they routed, and a
+    /// route found in a wider window (TRX-55) reaches beyond that.
     fn tidy(
         &mut self,
         attempt: &mut Attempt,
@@ -182,31 +183,25 @@ impl<'a> Router<'a> {
             profile: &dearer,
             ..self.finder
         };
-        let mut queue: VecDeque<ConnectionId> = (attempt.routed.iter().enumerate())
-            .filter(|&(i, routed)| {
-                routed
-                    .as_ref()
-                    .is_some_and(|routes| routes.vias.len() > self.fewest_vias(plan.connections[i]))
-            })
-            .map(|(i, _)| ConnectionId::from_index(i))
-            .collect();
-        while !queue.is_empty() && !cancel.is_cancelled() && !self.is_past_deadline() {
-            let batch = self.next_batch(&mut queue, plan, None);
-            for &id in &batch {
-                layout.remove_route(id);
+        for (i, routed) in attempt.routed.iter_mut().enumerate() {
+            if cancel.is_cancelled() || self.is_past_deadline() {
+                return;
             }
-            let found = self.find_all(finder, &batch, plan, None, layout, None);
-            for (&id, tidier) in batch.iter().zip(found) {
-                let Some(routes) = attempt.routed[id.index()].as_mut() else {
-                    continue;
-                };
-                if let Ok(tidier) = tidier
-                    && tidier.vias.len() < routes.vias.len()
-                {
-                    *routes = tidier;
-                }
-                layout.add_route(id, routes);
+            let connection = plan.connections[i];
+            let Some(routes) = routed else { continue };
+            if routes.vias.len() <= self.fewest_vias(connection) {
+                continue;
             }
+            let id = ConnectionId::from_index(i);
+            layout.remove_route(id);
+            let tidier = finder
+                .search(&mut self.scratches[0], connection, layout, None, None)
+                .ok()
+                .filter(|tidier| tidier.vias.len() < routes.vias.len());
+            if let Some(tidier) = tidier {
+                *routes = tidier;
+            }
+            layout.add_route(id, routes);
         }
     }
 
@@ -244,8 +239,7 @@ impl<'a> Router<'a> {
                 state.may_rip_up = false;
             }
             let batch = self.next_batch(&mut state.queue, plan, corridors);
-            let finder = self.finder;
-            let found = self.find_all(finder, &batch, plan, corridors, layout, state.negotiation());
+            let found = self.find_all(&batch, plan, corridors, layout, state.negotiation());
             let mut no_way = Vec::new();
             for (id, found) in batch.iter().copied().zip(found) {
                 match found {
@@ -328,9 +322,7 @@ impl<'a> Router<'a> {
                     history: &state.history,
                     present: Some(present),
                 };
-                let finder = self.finder;
-                let found =
-                    self.find_all(finder, &batch, plan, corridors, layout, Some(negotiation));
+                let found = self.find_all(&batch, plan, corridors, layout, Some(negotiation));
                 for (id, found) in batch.iter().copied().zip(found) {
                     let found = match found {
                         Ok(found) => Some(found),
@@ -507,13 +499,13 @@ impl<'a> Router<'a> {
     /// The route each connection of `batch` finds in `layout`, in batch order.
     fn find_all(
         &mut self,
-        finder: Finder,
         batch: &[ConnectionId],
         plan: &Plan,
         corridors: Option<&Corridors>,
         layout: &(impl LayoutAccess + Sync),
         negotiation: Option<search::Negotiation>,
     ) -> Vec<Result<Routes, NoRoute>> {
+        let finder = self.finder;
         let find = |scratch: &mut search::Scratch, id: ConnectionId| {
             let connection = plan.connections[id.index()];
             finder.find(scratch, id, connection, corridors, layout, negotiation)
@@ -879,7 +871,106 @@ fn routed_obstructions(layout: &impl LayoutAccess, routes: &Routes) -> Vec<Conne
 #[cfg(test)]
 mod tests {
     use super::*;
-    use traxide_contracts::PadId;
+    use traxide_contracts::testing::{DesignBuilder, at};
+    use traxide_contracts::{KeepoutScope, LayerId, PadId, Track, Via, ViaKindId};
+    use traxide_events::CancelToken;
+    use traxide_layout_access::Layout;
+    use traxide_rules::Purpose;
+
+    #[test]
+    fn tidying_keeps_clear_of_a_route_that_runs_beyond_its_window() {
+        // A runs over the wall's end at y 15 mm, far beyond its window, by two
+        // vias its own window holds no way round. B passes under A's way down
+        // at x 15 mm by two vias, which it could do without, were A not there.
+        let wall = traxide_contracts::geometry::Shape::Polygon(
+            traxide_contracts::geometry::Polygon::rectangle(Rect {
+                min: at(9.5, 0.0),
+                max: at(10.5, 14.0),
+            }),
+        );
+        let design = DesignBuilder::new(30.0, 20.0)
+            .keepout(wall, None, KeepoutScope::Everything)
+            .smd("A1", Some("A"), at(5.0, 2.0), 0.6, 0)
+            .smd("A2", Some("A"), at(15.0, 2.0), 0.6, 0)
+            .smd("B1", Some("B"), at(13.0, 10.0), 0.6, 0)
+            .smd("B2", Some("B"), at(18.0, 10.0), 0.6, 0)
+            .build();
+        let (a, b) = (design.net_named("A"), design.net_named("B"));
+        let track = |net, layer, path: &[Point]| Track {
+            net,
+            layer: LayerId::from_index(layer),
+            width: 200_000,
+            path: path.to_vec(),
+        };
+        let via = |net, x, y| Via {
+            net,
+            kind: ViaKindId(0),
+            position: at(x, y),
+        };
+        let over_the_wall = Routes {
+            tracks: vec![
+                track(a, 0, &[at(5.0, 2.0), at(5.0, 15.0)]),
+                track(a, 1, &[at(5.0, 15.0), at(15.0, 15.0)]),
+                track(a, 0, &[at(15.0, 15.0), at(15.0, 2.0)]),
+            ],
+            vias: vec![via(a, 5.0, 15.0), via(a, 15.0, 15.0)],
+        };
+        let under_a = Routes {
+            tracks: vec![
+                track(b, 0, &[at(13.0, 10.0), at(14.0, 10.0)]),
+                track(b, 1, &[at(14.0, 10.0), at(16.0, 10.0)]),
+                track(b, 0, &[at(16.0, 10.0), at(18.0, 10.0)]),
+            ],
+            vias: vec![via(b, 14.0, 10.0), via(b, 16.0, 10.0)],
+        };
+        let connection = |net, from: &str, to: &str| Connection {
+            net,
+            from: design.pad_named(from),
+            to: design.pad_named(to),
+        };
+        let plan = Plan {
+            connections: vec![connection(a, "A1", "A2"), connection(b, "B1", "B2")],
+        };
+        let profile = Profile {
+            name: "side by side".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 2_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 10,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 16,
+        };
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let mut layout = Layout::build(&design, &rules);
+        layout.add_route(ConnectionId::from_index(0), &over_the_wall);
+        layout.add_route(ConnectionId::from_index(1), &under_a);
+        let mut attempt = Attempt {
+            routed: vec![Some(over_the_wall), Some(under_a)],
+            ..attempt(&[])
+        };
+        Router::new(&design, &rules, &profile).tidy(
+            &mut attempt,
+            &plan,
+            &mut layout,
+            &CancelToken::new(),
+        );
+        let tidied = attempt.into_result(&plan).routes;
+        let rules = traxide_rules::compile(&design, Purpose::Verification);
+        let verdict = traxide_verification::verify(&design, &rules, &tidied);
+        let broken: Vec<_> = (verdict.violations.iter())
+            .filter(|v| !matches!(v, traxide_contracts::Violation::Unconnected { .. }))
+            .collect();
+        assert!(broken.is_empty(), "{broken:?}");
+    }
 
     fn attempt(routed: &[bool]) -> Attempt {
         Attempt {

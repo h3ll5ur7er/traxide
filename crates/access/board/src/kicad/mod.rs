@@ -8,7 +8,10 @@ pub(crate) mod ipc;
 mod project;
 mod rules;
 mod sexpr;
+mod unlocked;
 mod write;
+
+pub use unlocked::without_unlocked_wiring;
 
 use crate::BoardError;
 use traxide_contracts::{Design, Routes};

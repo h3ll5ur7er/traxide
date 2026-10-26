@@ -37,6 +37,9 @@ pub struct RouteJob {
     /// How long negotiation may go on, counted from the start of the job;
     /// what is still queued then routes once more without ripping anything up.
     pub time_limit: Option<Duration>,
+    /// Route the board's own wiring again, but for what the designer locked
+    /// or protected: a designer's tracks are moved only when asked.
+    pub reroute_existing: bool,
 }
 
 /// What a finished route job achieved.
@@ -108,6 +111,11 @@ pub enum RouteError {
     Profile(#[from] ProfileError),
     #[error("no net class named {name}; there are {}", known.join(", "))]
     UnknownNetClass { name: String, known: Vec<String> },
+    #[error(
+        "routing the board's own wiring again works on a board file or a Specctra design; \
+         in a running KiCad, delete the tracks to route again instead"
+    )]
+    RerouteInRunningKicad,
 }
 
 fn why_unrouted(
@@ -208,7 +216,13 @@ pub fn route(
     let started = Instant::now();
     let profile = traxide_profile_access::load_profile(&job.profile, job.profile_file.as_deref())?;
     events.publish(Event::StageStarted(Stage::Loading));
-    let design = traxide_board_access::load_design(&job.input)?;
+    let mut design = traxide_board_access::load_design(&job.input)?;
+    if job.reroute_existing {
+        if job.input.as_os_str() == RUNNING_KICAD {
+            return Err(RouteError::RerouteInRunningKicad);
+        }
+        design.existing = design.locked.clone();
+    }
     events.publish(Event::StageStarted(Stage::CompilingRules));
     let rules = traxide_rules::compile(
         &design,
@@ -262,24 +276,15 @@ pub fn route(
         let verdict = traxide_verification::verify(&design, &verification_rules, &everything);
         let to_join = plane_pads_to_join(&design, &verdict);
         if !to_join.is_empty() {
-            // Its connections are no part of the plan the layout's routes
-            // belong to, so they may rip none of them up.
-            let without_rip_up = Profile {
-                max_rip_ups: 0,
-                ..profile.clone()
-            };
             total += to_join.len();
-            let joined = Router::new(&escaped.design, &rules, &without_rip_up)
-                .with_threads(threads)
-                .route_plan(
-                    &Plan {
-                        connections: to_join,
-                    },
-                    None,
-                    &mut layout,
-                    cancel,
-                    events,
-                );
+            let joined = join_among(
+                &escaped.design,
+                &routes,
+                to_join,
+                (&rules, &profile, threads),
+                cancel,
+                events,
+            );
             routes.extend(joined.routes);
             unrouted.extend(joined.unrouted);
         }
@@ -410,10 +415,79 @@ fn plane_pads_to_join(design: &Design, verdict: &Verdict) -> Vec<Connection> {
     connections
 }
 
+/// Routes `connections` among `routes`, which stay as they are: a layout of
+/// its own holds them as the board's copper. Sharing the routing's layout, a
+/// plan of other connections would take its routes for theirs by their ids.
+fn join_among(
+    design: &Design,
+    routes: &Routes,
+    connections: Vec<Connection>,
+    (rules, profile, threads): (&ConstraintSet, &Profile, usize),
+    cancel: &CancelToken,
+    events: &impl Publisher<Event>,
+) -> RoutingResult {
+    let mut settled = design.clone();
+    settled.existing.extend(routes.clone());
+    let mut layout = Layout::build(&settled, rules);
+    Router::new(&settled, rules, profile)
+        .with_threads(threads)
+        .route_plan(&Plan { connections }, None, &mut layout, cancel, events)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use traxide_contracts::testing::{DesignBuilder, at};
+
+    #[test]
+    fn pads_joined_after_routing_keep_clear_of_the_routes_before_them() {
+        let design = DesignBuilder::new(20.0, 10.0)
+            .layers(3)
+            .plane_layer(1)
+            .smd("G2", Some("GND"), at(10.0, 5.0), 1.0, 0)
+            .smd("G3", Some("GND"), at(16.0, 5.0), 1.0, 0)
+            .smd("A1", Some("A"), at(13.0, 9.0), 1.0, 0)
+            .smd("A2", Some("A"), at(13.0, 1.0), 1.0, 0)
+            .build();
+        let across = Routes {
+            tracks: vec![traxide_contracts::Track {
+                net: design.net_named("A"),
+                layer: traxide_contracts::LayerId::from_index(0),
+                width: 200_000,
+                path: vec![at(13.0, 9.0), at(13.0, 1.0)],
+            }],
+            vias: vec![],
+        };
+        let to_join = vec![Connection {
+            net: design.net_named("GND"),
+            from: design.pad_named("G3"),
+            to: design.pad_named("G2"),
+        }];
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let profile = traxide_profile_access::load_profile("default", None).expect("profile");
+        let joined = join_among(
+            &design,
+            &across,
+            to_join,
+            (&rules, &profile, 1),
+            &CancelToken::new(),
+            &traxide_events::Silent,
+        );
+        assert!(joined.unrouted.is_empty());
+        let mut everything = across.clone();
+        everything.extend(joined.routes);
+        let rules = traxide_rules::compile(&design, Purpose::Verification);
+        let verdict = traxide_verification::verify(&design, &rules, &everything);
+        let broken: Vec<_> = (verdict.violations.iter())
+            .filter(|v| !matches!(v, Violation::Unconnected { .. }))
+            .collect();
+        assert!(broken.is_empty(), "{broken:?}");
+    }
 
     #[test]
     fn a_pad_walled_off_from_its_plane_is_joined_by_track_to_the_nearest_joined_pad() {

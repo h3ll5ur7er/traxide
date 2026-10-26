@@ -62,6 +62,10 @@ enum Command {
         /// more without ripping anything up; routing ends a little later.
         #[arg(long, value_name = "SECONDS", value_parser = seconds)]
         time_limit: Option<Duration>,
+        /// Route the board's own tracks and vias again, but for those locked in
+        /// KiCad or protected in the design (type fix or protect).
+        #[arg(long, conflicts_with = "kicad")]
+        reroute_existing: bool,
     },
     /// Check a board: how many of its nets are complete and which rules its
     /// copper breaks, with the routes of a session if one is given.
@@ -127,41 +131,51 @@ fn main() -> ExitCode {
 
 /// Routes or checks as `cli` says; a route writes its summary to `summary`.
 fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
-    let (input, output, profile, config, threads, quiet, drc, time_limit) = match cli.command {
-        Command::Freerouting { args } => return run_as_freerouting(&args),
-        Command::Check {
-            board,
-            session,
-            json,
-            drc,
-        } => {
-            return run_check(
-                CheckJob {
-                    board,
-                    session,
-                    drc_report: drc,
-                },
+    let (input, output, profile, config, threads, quiet, drc, time_limit, reroute_existing) =
+        match cli.command {
+            Command::Freerouting { args } => return run_as_freerouting(&args),
+            Command::Check {
+                board,
+                session,
                 json,
-            );
-        }
-        Command::Route {
-            input,
-            // Clap lets through either a board or --kicad, never both.
-            kicad: _,
-            output,
-            profile,
-            config,
-            threads,
-            quiet,
-            drc,
-            time_limit,
-        } => {
-            let input = input.unwrap_or_else(|| PathBuf::from(traxide_routing::RUNNING_KICAD));
-            (
-                input, output, profile, config, threads, quiet, drc, time_limit,
-            )
-        }
-    };
+                drc,
+            } => {
+                return run_check(
+                    CheckJob {
+                        board,
+                        session,
+                        drc_report: drc,
+                    },
+                    json,
+                );
+            }
+            Command::Route {
+                input,
+                // Clap lets through either a board or --kicad, never both.
+                kicad: _,
+                output,
+                profile,
+                config,
+                threads,
+                quiet,
+                drc,
+                time_limit,
+                reroute_existing,
+            } => {
+                let input = input.unwrap_or_else(|| PathBuf::from(traxide_routing::RUNNING_KICAD));
+                (
+                    input,
+                    output,
+                    profile,
+                    config,
+                    threads,
+                    quiet,
+                    drc,
+                    time_limit,
+                    reroute_existing,
+                )
+            }
+        };
     let job = RouteJob {
         input,
         output,
@@ -171,6 +185,7 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
         unrouted_net_classes: Vec::new(),
         drc_report: drc,
         time_limit,
+        reroute_existing,
     };
     let progress = |event: Event| {
         if !quiet {

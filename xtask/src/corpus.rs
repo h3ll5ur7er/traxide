@@ -10,11 +10,12 @@
 
 use crate::gate::{Outcome, Record};
 use crate::kicad::{self, Kicad};
-use crate::kicad_project::{Project, RULE_FILES, strip_unlocked_copper};
+use crate::kicad_project::{Project, RULE_FILES};
 use anyhow::{Context, Result, anyhow, ensure};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use traxide_board_access::kicad::without_unlocked_wiring;
 
 const DEFAULT_LISTS: [&str; 2] = [
     "corpus/freerouting-fixtures.txt",
@@ -155,7 +156,7 @@ impl Corpus<'_> {
         let stripped = folder.join("stripped.kicad_pcb");
         std::fs::write(
             &stripped,
-            strip_unlocked_copper(&std::fs::read_to_string(&committed)?),
+            without_unlocked_wiring(&std::fs::read_to_string(&committed)?),
         )?;
         for extension in RULE_FILES {
             let rules = committed.with_extension(extension);

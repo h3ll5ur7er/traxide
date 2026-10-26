@@ -143,7 +143,7 @@ impl<'a> Reader<'a> {
         for footprint in self.root.children("footprint") {
             self.footprint(footprint, &mut pads)?;
         }
-        let existing = self.existing()?;
+        let (existing, locked) = self.existing()?;
         for zone in self.root.children("zone") {
             self.zone(zone)?;
         }
@@ -195,7 +195,7 @@ impl<'a> Reader<'a> {
                 layers: self.layers,
                 outline,
                 cutout_footprints,
-                locked: Routes::default(),
+                locked,
                 nets: self.nets,
                 pads,
                 via_kinds: self.via_kinds.kinds,
@@ -542,10 +542,11 @@ impl<'a> Reader<'a> {
             .collect()
     }
 
-    /// The board's own tracks and vias. Copper of no net cannot be a route and
-    /// keeps other copper away instead.
-    fn existing(&mut self) -> Result<Routes, BoardError> {
-        let mut routes = Routes::default();
+    /// The board's own tracks and vias, and those of them the designer
+    /// locked. Copper of no net cannot be a route and keeps other copper away
+    /// instead.
+    fn existing(&mut self) -> Result<(Routes, Routes), BoardError> {
+        let (mut routes, mut locked) = (Routes::default(), Routes::default());
         for item in self.root.args() {
             let path = match item.keyword() {
                 Some("segment") => vec![
@@ -558,7 +559,11 @@ impl<'a> Reader<'a> {
                     point(item.required_child("end")?)?,
                 ),
                 Some("via") => {
+                    let before = routes.vias.len();
                     self.via(item, &mut routes)?;
+                    if is_locked(item) && routes.vias.len() > before {
+                        locked.vias.extend(routes.vias.last().cloned());
+                    }
                     continue;
                 }
                 _ => continue,
@@ -568,12 +573,18 @@ impl<'a> Reader<'a> {
                 continue;
             };
             match self.net_of(item) {
-                Some(net) => routes.tracks.push(Track {
-                    net,
-                    layer,
-                    width,
-                    path,
-                }),
+                Some(net) => {
+                    let track = Track {
+                        net,
+                        layer,
+                        width,
+                        path,
+                    };
+                    if is_locked(item) {
+                        locked.tracks.push(track.clone());
+                    }
+                    routes.tracks.push(track);
+                }
                 None => {
                     for pair in path.windows(2) {
                         let shape = Shape::track(Segment::new(pair[0], pair[1]), width);
@@ -582,7 +593,7 @@ impl<'a> Reader<'a> {
                 }
             }
         }
-        Ok(routes)
+        Ok((routes, locked))
     }
 
     fn via(&mut self, via: &'a Sexp, routes: &mut Routes) -> Result<(), BoardError> {
@@ -883,6 +894,15 @@ fn drawing(
 
 /// The points of an arc from `start` through `mid` to `end`, close enough
 /// that no part of the arc is more than ARC_TOLERANCE from them.
+/// Whether the designer locked a track or via: `(locked yes)`, or `locked`
+/// among its words as KiCad wrote it before version 7.
+fn is_locked(item: &Sexp) -> bool {
+    item.atoms().any(|word| word == "locked")
+        || item
+            .child("locked")
+            .is_some_and(|locked| locked.atoms().next().is_none_or(|word| word == "yes"))
+}
+
 fn arc(start: Point, mid: Point, end: Point) -> Vec<Point> {
     let [(ax, ay), (bx, by), (cx, cy)] =
         [start, mid, end].map(|p| (f64::from(p.x), f64::from(p.y)));
@@ -1142,6 +1162,25 @@ mod tests {
                 {items})"#
         );
         read(&text, None, None).expect("valid board")
+    }
+
+    #[test]
+    fn tracks_arcs_and_vias_the_designer_locked_are_kept_apart() {
+        let design = read_board(
+            r#"(net 1 "GND")
+               (segment (start 1 1) (end 2 1) (width 0.2) (layer "F.Cu") (locked yes) (net 1))
+               (segment locked (start 1 2) (end 2 2) (width 0.2) (layer "F.Cu") (net 1))
+               (segment (start 1 3) (end 2 3) (width 0.2) (layer "F.Cu") (net 1))
+               (via (at 3 3) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (locked yes) (net 1))
+               (via (at 4 4) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))"#,
+        )
+        .design;
+        assert_eq!(design.existing.tracks.len(), 3);
+        assert_eq!(design.existing.vias.len(), 2);
+        let ys: Vec<i32> = design.locked.tracks.iter().map(|t| t.path[0].y).collect();
+        assert_eq!(ys, [1_000_000, 2_000_000]);
+        assert_eq!(design.locked.vias.len(), 1);
+        assert_eq!(design.locked.vias[0].position.x, 3_000_000);
     }
 
     #[test]
