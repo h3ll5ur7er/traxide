@@ -15,7 +15,7 @@ mod search;
 
 use search::NoRoute;
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use traxide_contracts::geometry::{Point, Rect, Segment};
@@ -57,6 +57,10 @@ pub struct Router<'a> {
     scratches: Vec<search::Scratch>,
     /// When negotiation stops ripping up, whatever it would still gain.
     deadline: Option<Instant>,
+    /// Whether the board's own copper cuts each connection asked about off,
+    /// which no routing changes: a search for one cut off floods all it can
+    /// reach, again on every attempt.
+    cut_off: HashMap<Connection, bool>,
 }
 
 impl std::fmt::Debug for Router<'_> {
@@ -78,6 +82,7 @@ impl<'a> Router<'a> {
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
+            cut_off: HashMap::new(),
         }
     }
 
@@ -315,14 +320,14 @@ impl<'a> Router<'a> {
                     unrouted.push(id);
                     continue;
                 }
+                if self.is_cut_off(connection, layout) {
+                    cut_off.push(connection);
+                    unrouted.push(id);
+                    continue;
+                }
                 match self.find_wider(connection, layout, state.negotiation()) {
                     Some(found) => state.commit(self.finder.design, layout, id, found, &[], events),
-                    None => {
-                        if self.is_cut_off(connection, layout) {
-                            cut_off.push(connection);
-                        }
-                        unrouted.push(id);
-                    }
+                    None => unrouted.push(id),
                 }
             }
         }
@@ -378,7 +383,11 @@ impl<'a> Router<'a> {
                         Err(NoRoute::Blocked { .. }) => None,
                         Err(NoRoute::NotFound) => {
                             let connection = plan.connections[id.index()];
-                            self.find_wider(connection, layout, Some(negotiation))
+                            if self.is_cut_off(connection, layout) {
+                                None
+                            } else {
+                                self.find_wider(connection, layout, Some(negotiation))
+                            }
                         }
                     };
                     match found {
@@ -489,14 +498,17 @@ impl<'a> Router<'a> {
     }
 
     /// Whether the board's own copper, keepouts and edge leave no way at all
-    /// between the pads of `connection`, whatever was routed.
+    /// between the pads of `connection`, whatever was routed; searched once.
     fn is_cut_off(&mut self, connection: Connection, layout: &impl LayoutAccess) -> bool {
+        if let Some(&known) = self.cut_off.get(&connection) {
+            return known;
+        }
         let board = self.finder.design.outline.bounds();
         let whole_board = Profile {
             detour_margin: (board.max.x - board.min.x).max(board.max.y - board.min.y),
             ..self.finder.profile.clone()
         };
-        search::Search::new(
+        let cut_off = search::Search::new(
             self.finder.design,
             self.finder.rules,
             &whole_board,
@@ -507,7 +519,9 @@ impl<'a> Router<'a> {
         )
         .through_routed_copper()
         .run(&mut self.scratches[0])
-        .is_err()
+        .is_err();
+        self.cut_off.insert(connection, cut_off);
+        cut_off
     }
 
     /// Takes up to the profile's `batch_size` connections from the front of
@@ -554,9 +568,12 @@ impl<'a> Router<'a> {
         layout: &(impl LayoutAccess + Sync),
         negotiation: Option<search::Negotiation>,
     ) -> Vec<Result<Routes, NoRoute>> {
-        let finder = self.finder;
+        let (finder, known) = (self.finder, &self.cut_off);
         let find = |scratch: &mut search::Scratch, id: ConnectionId| {
             let connection = plan.connections[id.index()];
+            if known.get(&connection) == Some(&true) {
+                return Err(NoRoute::NotFound);
+            }
             finder.find(scratch, id, connection, corridors, layout, negotiation)
         };
         let workers = self.scratches.len().min(batch.len());
