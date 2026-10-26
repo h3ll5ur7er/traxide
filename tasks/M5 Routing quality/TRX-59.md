@@ -2,7 +2,7 @@
 id: TRX-59
 title: Move the board's unlocked wiring when it blocks a connection
 type: feature
-status: review
+status: done
 assignee: claude
 priority: low
 labels: [detailed-routing, board-access]
@@ -32,4 +32,4 @@ Moving a designer's tracks is a decision for the designer, so it is opt-in.
 | Issue214-freerouting | complete, 215 vias, 4462 mm | complete, 128 vias, 4117 mm |
 | Issue367-UltraFlactyl | complete | complete |
 
-On caniot its author's routing of the one routing layer beats traxide's, so routing all of it again loses three nets. Moving only the wiring that blocks a connection would keep the rest: route as today, and where the board's own unlocked copper hems a connection in, take out only the wiring a search through it would cross, and route those connections again.
+On caniot its author's routing of the one routing layer beats traxide's, so routing all of it again loses three nets. Moving only the wiring that blocks a connection would keep the rest: [[TRX-75]].
