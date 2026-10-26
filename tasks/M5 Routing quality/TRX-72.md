@@ -34,3 +34,24 @@ From the TokenBoard report ([[Research/TokenBoard-report]]): traxide placed 547 
 The whole corpus passes the gate (0 regressions, 8 improvements, 50 complete). Freerouting's 194 vias on the report's board stay out of reach this way: they would need the layout negotiation settles on to change, such as preferred directions per layer, which want tuning first.
 
 **Fixed after the merge:** tidying in batches broke a rule on Issue283 (CI, PR #18): a clearance between tracks of Net-(U1-Pad24) and Net-(J13-Pad1). Batches keep apart what connections may search, not what they routed, and a route found in a wider window ([[TRX-55]]) reaches beyond that: taken out together with a neighbour whose window was apart, the neighbour's tidier route ran where the wide route lay, and the wide route came back. Tidying is now one connection at a time; batched, it had saved some 3 %. Plane joins after routing ([[TRX-67]]) also route in a layout of their own now, holding the routes as the board's copper: sharing the routing's layout, their plan's ids named the routing's connections, and tidying them took those out.
+
+**Tried again after [[TRX-73]]** (October 2026, this machine, `--time-limit 90`), neither kept:
+
+- **Preferred layer directions with an estimate that knows them:** a step against its layer's direction costs a share of its length extra (half for a diagonal step). The estimate takes the lower of two bounds: staying on the layer and paying that share, or a via plus the plain octilinear distance. It stays a lower bound, which the first try's estimate was not.
+
+  | Share | keyboard-tkl | Sofle (Issue178) | TokenBoard's KiCad board |
+  | --- | --- | --- | --- |
+  | none (today) | 87 vias, 2.8 s | 518 vias, 52 s | 446 vias, 78 s |
+  | 0.5 | 81 vias, 6.1 s | 526 vias, 41 s | 631 vias, 95 s, at the limit |
+  | 1.0 | 79 vias, 36 s | 501 vias, 56 s | |
+
+  On TokenBoard the directions cost vias rather than save them.
+- **Tidying again while it gains:** a second pass finds some connections a way with fewer vias, through room the first pass freed.
+
+  | Board | One pass | Further passes |
+  | --- | --- | --- |
+  | keyboard-tkl | 101 → 88 vias | nothing more |
+  | Sofle | 566 → 520 vias | 516 |
+  | TokenBoard | 539 → 453 vias | 438, but it then hits the 90 s limit |
+
+**Where TokenBoard's vias are:** the column nets hold most of the 446 new vias. Each COL net has 16–27, and each runs from switches in both halves of the board to the RP2350. The rest of the routes are hops over other copper. Fewer of them needs the columns routed so they cross less, not cheaper layer changes.
