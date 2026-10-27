@@ -20,6 +20,15 @@ pub struct ConstraintSet {
     /// Per class, how narrow and how wide its tracks may be: limits to judge
     /// by, not the width to route at.
     track_width_limits_of_class: Vec<Limits>,
+    /// Per class, how large across and how large a drill its vias may have.
+    via_limits_of_class: Vec<ViaLimits>,
+}
+
+/// How large across, and how large a drill, a via may have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ViaLimits {
+    pub diameter: Limits,
+    pub drill: Limits,
 }
 
 impl ConstraintSet {
@@ -47,6 +56,7 @@ impl ConstraintSet {
             cutout_clearances: Vec::new(),
             hole_to_hole: 0,
             track_width_limits_of_class: Vec::new(),
+            via_limits_of_class: Vec::new(),
         }
     }
 
@@ -66,6 +76,23 @@ impl ConstraintSet {
     pub fn with_track_width_limits(mut self, limits: Vec<Limits>) -> Self {
         self.track_width_limits_of_class = limits;
         self
+    }
+
+    /// How large across and how large a drill the vias of each class may
+    /// have, in class order.
+    #[must_use]
+    pub fn with_via_limits(mut self, limits: Vec<ViaLimits>) -> Self {
+        self.via_limits_of_class = limits;
+        self
+    }
+
+    /// How large across and how large a drill a via of `net` may have; no
+    /// limits where none were given.
+    pub fn via_limits(&self, net: NetId) -> ViaLimits {
+        self.via_limits_of_class
+            .get(self.class(Some(net)).index())
+            .copied()
+            .unwrap_or_default()
     }
 
     /// How narrow and how wide a track of `net` may be; no limits where none

@@ -12,8 +12,8 @@ use pieces::Piece;
 use std::collections::BTreeSet;
 use traxide_contracts::geometry::Point;
 use traxide_contracts::{
-    ConstraintSet, CopperItem, Design, KeepoutScope, LayerId, NetId, PadId, Routes, Verdict,
-    Violation,
+    ConstraintSet, CopperItem, Design, KeepoutScope, LayerId, Limits, NetId, PadId, Routes,
+    Verdict, Violation,
 };
 use unions::Unions;
 
@@ -52,6 +52,7 @@ pub fn verify(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Verdic
     let mut violations: Vec<Violation> = found.into_iter().collect();
     violations.extend(holes_too_close(design, rules, routes));
     violations.extend(widths_out_of_limits(rules, routes));
+    violations.extend(vias_out_of_limits(design, rules, routes));
     violations.extend(edge_and_keepout_violations(design, rules, &pieces));
     violations.extend(dangling_ends(design, routes, &pieces));
     pieces::join_layers_of_the_same_item(&pieces, &mut joined);
@@ -78,6 +79,48 @@ fn widths_out_of_limits(rules: &ConstraintSet, routes: &Routes) -> Vec<Violation
             })
         })
         .collect()
+}
+
+/// The vias larger or smaller across, then those with a larger or smaller
+/// drill, than the rules for their net allow, each in order. Across is the
+/// width of a via's largest copper.
+fn vias_out_of_limits(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Vec<Violation> {
+    let breaks = |value: i32, limits: Limits| {
+        limits.min.is_some_and(|min| value < min) || limits.max.is_some_and(|max| value > max)
+    };
+    let mut diameters = Vec::new();
+    let mut drills = Vec::new();
+    for (index, via) in routes.vias.iter().enumerate() {
+        let limits = rules.via_limits(via.net);
+        let kind = design.via_kind(via.kind);
+        let diameter = kind
+            .copper
+            .iter()
+            .map(|c| {
+                let bounds = c.shape.bounds();
+                (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y)
+            })
+            .max()
+            .unwrap_or(0);
+        if breaks(diameter, limits.diameter) {
+            diameters.push(Violation::ViaDiameter {
+                item: CopperItem::Via(index),
+                diameter,
+                min: limits.diameter.min,
+                max: limits.diameter.max,
+            });
+        }
+        if let Some(drill) = kind.drill.filter(|&drill| breaks(drill, limits.drill)) {
+            drills.push(Violation::HoleSize {
+                item: CopperItem::Via(index),
+                drill,
+                min: limits.drill.min,
+                max: limits.drill.max,
+            });
+        }
+    }
+    diameters.extend(drills);
+    diameters
 }
 
 /// The pairs of vias whose holes are closer than the hole-to-hole distance, in

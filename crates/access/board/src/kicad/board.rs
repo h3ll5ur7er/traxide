@@ -241,6 +241,8 @@ impl<'a> Reader<'a> {
             hole_clearance: self.project.hole_clearance,
             hole_to_hole: self.project.hole_to_hole,
             min_track_width: self.project.min_track_width,
+            min_via_diameter: self.project.min_via_diameter,
+            min_via_drill: self.project.min_via_drill,
             custom: Vec::new(),
         }
     }

@@ -51,6 +51,8 @@ fn kind(violation: &Violation) -> &'static str {
         Violation::Clearance { .. } => "clearance",
         Violation::HoleToHole { .. } => "hole to hole",
         Violation::TrackWidth { .. } => "track width",
+        Violation::ViaDiameter { .. } => "via diameter",
+        Violation::HoleSize { .. } => "hole size",
         Violation::Edge { .. } => "edge",
         Violation::Keepout { .. } => "keepout",
         Violation::Dangling { .. } => "dangling",

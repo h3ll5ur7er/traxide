@@ -36,6 +36,20 @@ pub enum Violation {
         min: Option<i32>,
         max: Option<i32>,
     },
+    /// A via larger or smaller across than the rules for its copper allow.
+    ViaDiameter {
+        item: CopperItem,
+        diameter: i32,
+        min: Option<i32>,
+        max: Option<i32>,
+    },
+    /// A via's drill larger or smaller than the rules for its copper allow.
+    HoleSize {
+        item: CopperItem,
+        drill: i32,
+        min: Option<i32>,
+        max: Option<i32>,
+    },
     /// Copper outside the board or closer to its edge than allowed.
     Edge { layer: LayerId, item: CopperItem },
     /// Copper where a keepout forbids it.
