@@ -925,7 +925,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             .finish_stub
             .get(self.layer_node(last_state))
             .expect("the target is reached through a way into it");
-        let mut reversed: Vec<Step> = stub_points(finish)
+        let mut reversed: Vec<Step> = stub_points_into_pad(finish)
             .map(|at| Step {
                 at,
                 layer: last_layer,
@@ -978,9 +978,15 @@ fn octilinear_paths(from: Point, to: Point) -> Vec<Vec<Point>> {
 }
 
 /// The points of a stub from its pad outwards, without the node it reaches,
-/// in the order a path walked backwards meets them.
+/// in the order a path walked backwards meets them at its start.
 fn stub_points(stub: Stub) -> impl Iterator<Item = Point> {
     stub.bend.into_iter().chain([stub.anchor])
+}
+
+/// The points of a stub into its pad, in the order a path walked backwards
+/// meets them at its end: the pad first.
+fn stub_points_into_pad(stub: Stub) -> impl Iterator<Item = Point> {
+    [stub.anchor].into_iter().chain(stub.bend)
 }
 
 /// The points where a ray from `from` along `direction` crosses a grid line of

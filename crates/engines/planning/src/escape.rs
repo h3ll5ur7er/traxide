@@ -57,8 +57,8 @@ impl Escaped {
     /// The stubs that a routed connection starts from: a stub all of whose
     /// connections are among `unrouted` would only dangle, and one that lies
     /// on a lane of the board's wiring would end dangling in its middle, as
-    /// the lane leads the pin out already. Each ends where the route of
-    /// `routes` farthest from its pin joins it.
+    /// the lane leads the pin out already. Each ends where the copper of
+    /// `routes` or of the board's wiring farthest from its pin joins it.
     pub fn copper_used(&self, unrouted: &[Connection], routes: &Routes) -> Routes {
         let tracks = self
             .escapes
@@ -73,7 +73,12 @@ impl Escaped {
             })
             .map(|(_, escape)| &escape.stub)
             .filter(|stub| !self.is_wired_along(stub))
-            .filter_map(|stub| trimmed(stub, routes))
+            .filter_map(|stub| {
+                trimmed(
+                    stub,
+                    routes.tracks.iter().chain(&self.design.existing.tracks),
+                )
+            })
             .collect();
         Routes {
             tracks,
@@ -112,20 +117,19 @@ impl Escaped {
     }
 }
 
-/// `stub` up to where the track of `routes` farthest from its pin ends on it,
-/// as the pad at its end is all of its copper and a route may join it
-/// anywhere: beyond that the stub would lead nowhere. Unchanged where no
-/// track ends on it; none where they all end at the pin.
-fn trimmed(stub: &Track, routes: &Routes) -> Option<Track> {
+/// `stub` up to the point of `tracks` on it farthest from its pin, as the pad
+/// at its end is all of its copper: a route may join it anywhere, or run
+/// along it from the pin and leave it at a bend, as may the board's wiring,
+/// and beyond that the stub would lead nowhere. Unchanged where no track
+/// touches it; none where they all touch it at the pin.
+fn trimmed<'t>(stub: &Track, tracks: impl Iterator<Item = &'t Track>) -> Option<Track> {
     let [pin, end] = [stub.path[0], stub.path[1]];
     let along = Segment::new(pin, end);
     let (dx, dy) = (f64::from(end.x - pin.x), f64::from(end.y - pin.y));
     let length_squared = dx * dx + dy * dy;
-    let farthest = routes
-        .tracks
-        .iter()
-        .filter(|t| t.net == stub.net && t.layer == stub.layer && t.path.len() >= 2)
-        .flat_map(|t| [(t.path[0], t.width), (t.path[t.path.len() - 1], t.width)])
+    let farthest = tracks
+        .filter(|t| t.net == stub.net && t.layer == stub.layer)
+        .flat_map(|t| t.path.iter().map(|&at| (at, t.width)))
         .filter(|&(at, width)| {
             along.is_point_closer_than(at, i64::from((stub.width + width) / 2) + 1)
         })
@@ -456,6 +460,25 @@ mod tests {
             .find(|t| t.net == n1)
             .expect("N1's stub");
         assert_eq!(stub.path, [pin, middle]);
+    }
+
+    #[test]
+    fn a_stub_ends_where_the_boards_wiring_leading_from_its_pin_bends_off_it() {
+        let mut design = chip(8).build();
+        let n1 = design.net_named("N1");
+        let pin = design.pad(design.pad_named("U1-1")).position;
+        let start = start_of(&escaped(&design), "N1").position;
+        let bend = Point::new(pin.x, (pin.y + start.y) / 2);
+        design.existing.tracks.push(Track {
+            net: n1,
+            layer: traxide_contracts::LayerId(0),
+            width: mm(0.2),
+            path: vec![pin, bend, Point::new(bend.x - mm(2.0), bend.y)],
+        });
+        let escaped = escaped(&design);
+        let copper = escaped.copper_used(&[], &Routes::default());
+        let stub = copper.tracks.iter().find(|t| t.net == n1);
+        assert!(stub.is_none_or(|s| s.path == [pin, bend]), "{stub:?}");
     }
 
     #[test]
