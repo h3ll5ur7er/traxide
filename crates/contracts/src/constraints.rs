@@ -1,4 +1,4 @@
-use crate::{NetClassId, NetId, ViaKindId};
+use crate::{Limits, NetClassId, NetId, ViaKindId};
 
 /// The rules compiled for routing: everything a router asks, answered in O(1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +17,9 @@ pub struct ConstraintSet {
     /// that draws it set another; the rest keep `edge_clearance`.
     cutout_clearances: Vec<i32>,
     hole_to_hole: i32,
+    /// Per class, how narrow and how wide its tracks may be: limits to judge
+    /// by, not the width to route at.
+    track_width_limits_of_class: Vec<Limits>,
 }
 
 impl ConstraintSet {
@@ -43,6 +46,7 @@ impl ConstraintSet {
             edge_clearance,
             cutout_clearances: Vec::new(),
             hole_to_hole: 0,
+            track_width_limits_of_class: Vec::new(),
         }
     }
 
@@ -55,6 +59,22 @@ impl ConstraintSet {
 
     pub fn hole_to_hole(&self) -> i32 {
         self.hole_to_hole
+    }
+
+    /// How narrow and how wide the tracks of each class may be, in class order.
+    #[must_use]
+    pub fn with_track_width_limits(mut self, limits: Vec<Limits>) -> Self {
+        self.track_width_limits_of_class = limits;
+        self
+    }
+
+    /// How narrow and how wide a track of `net` may be; no limits where none
+    /// were given.
+    pub fn track_width_limits(&self, net: NetId) -> Limits {
+        self.track_width_limits_of_class
+            .get(self.class(Some(net)).index())
+            .copied()
+            .unwrap_or_default()
     }
 
     /// The edge clearance of each hole of the outline, in its order.

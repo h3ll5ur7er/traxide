@@ -14,7 +14,8 @@ pub(crate) struct Project {
     /// How far apart holes stay.
     pub hole_to_hole: i32,
     min_clearance: i32,
-    min_track_width: i32,
+    /// The narrowest a track may be, whatever its class.
+    pub min_track_width: i32,
     assignments: HashMap<String, String>,
     patterns: Vec<(String, String)>,
 }
@@ -53,6 +54,8 @@ const DEFAULT_VIA_DIAMETER: f64 = 0.6;
 const DEFAULT_VIA_DRILL: f64 = 0.3;
 const DEFAULT_EDGE_CLEARANCE: f64 = 0.5;
 const DEFAULT_HOLE_CLEARANCE: f64 = 0.25;
+/// What a new KiCad 10 project states as the narrowest track.
+const DEFAULT_MIN_TRACK_WIDTH: f64 = 0.2;
 /// KiCad's default minimum between holes, which JLCPCB asks too.
 const DEFAULT_HOLE_TO_HOLE: f64 = 0.25;
 
@@ -71,7 +74,7 @@ impl Project {
         let rules = &json["board"]["design_settings"]["rules"];
         let minimum = |key: &str, default: f64| rules[key].as_f64().unwrap_or(default);
         let min_clearance = nanometres(minimum("min_clearance", 0.0));
-        let min_track_width = nanometres(minimum("min_track_width", 0.0));
+        let min_track_width = nanometres(minimum("min_track_width", DEFAULT_MIN_TRACK_WIDTH));
         let settings = &json["net_settings"];
         let listed = settings["classes"].as_array().cloned().unwrap_or_default();
         let default = listed
@@ -262,6 +265,8 @@ mod tests {
         assert_eq!((default.clearance, default.track_width), (300_000, 150_000));
         assert_eq!(project.edge_clearance, 300_000);
         assert_eq!(project.hole_clearance, 400_000);
+        // Kept on its own too, as the limit verification judges widths by.
+        assert_eq!(project.min_track_width, 150_000);
     }
 
     #[test]

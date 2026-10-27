@@ -626,3 +626,85 @@ fn a_track_end_just_off_a_pads_edge_that_its_width_overlaps_does_not_dangle() {
     };
     assert_eq!(check(&design, routes), Verdict::default());
 }
+
+#[test]
+fn a_track_narrower_than_the_boards_minimum_breaks_the_width_rule() {
+    let mut design = board();
+    design.rules.min_track_width = mm(0.25);
+    let routes = Routes {
+        tracks: vec![track(&design, "A", 0, &[at(2.0, 5.0), at(18.0, 5.0)])],
+        vias: vec![],
+    };
+    assert_eq!(
+        check(&design, routes).violations,
+        [Violation::TrackWidth {
+            item: CopperItem::Track(0),
+            width: mm(0.2),
+            min: Some(mm(0.25)),
+            max: None
+        }]
+    );
+}
+
+#[test]
+fn a_custom_rule_sets_the_width_limits_of_the_tracks_it_names() {
+    // A's tracks between 0.3 mm and 0.5 mm wide, as a KiCad board's rules may ask.
+    let mut design = board();
+    let a = design.net_named("A");
+    design.rules.custom.push(traxide_contracts::CustomRule {
+        name: "power".into(),
+        condition: traxide_contracts::Condition::NetIn {
+            item: traxide_contracts::Item::A,
+            nets: vec![Some(a)],
+        },
+        constraint: traxide_contracts::Constraint::TrackWidth,
+        limits: traxide_contracts::Limits {
+            min: Some(mm(0.3)),
+            opt: None,
+            max: Some(mm(0.5)),
+        },
+    });
+    let mut narrow = track(&design, "A", 0, &[at(2.0, 5.0), at(10.0, 5.0)]);
+    narrow.width = mm(0.2);
+    let mut wide = track(&design, "A", 0, &[at(10.0, 5.0), at(18.0, 5.0)]);
+    wide.width = mm(0.6);
+    let routes = Routes {
+        tracks: vec![narrow, wide],
+        vias: vec![],
+    };
+    let widths: Vec<_> = check(&design, routes)
+        .violations
+        .into_iter()
+        .filter(|v| matches!(v, Violation::TrackWidth { .. }))
+        .collect();
+    assert_eq!(
+        widths,
+        [
+            Violation::TrackWidth {
+                item: CopperItem::Track(0),
+                width: mm(0.2),
+                min: Some(mm(0.3)),
+                max: Some(mm(0.5))
+            },
+            Violation::TrackWidth {
+                item: CopperItem::Track(1),
+                width: mm(0.6),
+                min: Some(mm(0.3)),
+                max: Some(mm(0.5))
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_class_width_alone_limits_nothing() {
+    // Specctra's class widths are the widths to route at, not limits.
+    let design = board();
+    let mut thin = track(&design, "A", 0, &[at(2.0, 5.0), at(18.0, 5.0)]);
+    thin.width = mm(0.1);
+    let routes = Routes {
+        tracks: vec![thin],
+        vias: vec![],
+    };
+    assert_eq!(check(&design, routes), Verdict::default());
+}

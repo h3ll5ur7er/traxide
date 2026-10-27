@@ -4,7 +4,9 @@
 mod custom;
 
 use custom::{Groups, Rules};
-use traxide_contracts::{Constraint, ConstraintSet, Design, NetClassId, ViaKind, ViaKindId};
+use traxide_contracts::{
+    Constraint, ConstraintSet, Design, Limits, NetClassId, ViaKind, ViaKindId,
+};
 
 /// What the compiled rules are for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +121,28 @@ pub fn compile(design: &Design, purpose: Purpose) -> ConstraintSet {
         0 => 0,
         apart => apart + margin,
     })
+    .with_track_width_limits(
+        ids.iter()
+            .map(|&group| track_width_limits(design, &rules, group))
+            .collect(),
+    )
+}
+
+/// How narrow and how wide the tracks of `group` may be: the board's minimum,
+/// and the last rule that surely applies to them. A rule that only may apply,
+/// as the reader could not tell, limits nothing to judge by.
+fn track_width_limits(design: &Design, rules: &Rules, group: NetClassId) -> Limits {
+    let stated = rules
+        .of(Constraint::TrackWidth, group)
+        .last
+        .copied()
+        .unwrap_or_default();
+    let board = Some(design.rules.min_track_width).filter(|&min| min > 0);
+    Limits {
+        min: stated.min.max(board),
+        opt: None,
+        max: stated.max,
+    }
 }
 
 /// The width of a via's largest copper.
@@ -207,6 +231,7 @@ mod tests {
                 edge_clearance: 250,
                 hole_clearance: 0,
                 hole_to_hole: 0,
+                min_track_width: 0,
                 custom: vec![],
             },
             resolution,

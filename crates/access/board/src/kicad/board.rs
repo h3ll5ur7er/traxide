@@ -240,6 +240,7 @@ impl<'a> Reader<'a> {
             edge_clearance: self.project.edge_clearance,
             hole_clearance: self.project.hole_clearance,
             hole_to_hole: self.project.hole_to_hole,
+            min_track_width: self.project.min_track_width,
             custom: Vec::new(),
         }
     }

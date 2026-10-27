@@ -50,6 +50,7 @@ fn kind(violation: &Violation) -> &'static str {
     match violation {
         Violation::Clearance { .. } => "clearance",
         Violation::HoleToHole { .. } => "hole to hole",
+        Violation::TrackWidth { .. } => "track width",
         Violation::Edge { .. } => "edge",
         Violation::Keepout { .. } => "keepout",
         Violation::Dangling { .. } => "dangling",
