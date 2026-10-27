@@ -45,6 +45,26 @@ pub(crate) fn report(
                 "severity": "warning",
                 "items": [item(*a, None), item(*b, None)],
             })),
+            Violation::TrackWidth {
+                item: copper,
+                width,
+                min,
+                max,
+            } => {
+                let limit = match (min, max) {
+                    (Some(min), _) if width < min => format!("min {:.4} mm", millimetres(*min)),
+                    (_, Some(max)) => format!("max {:.4} mm", millimetres(*max)),
+                    _ => String::new(),
+                };
+                violations.push(entry(
+                    "track_width",
+                    &format!(
+                        "Track width ({limit}; actual {:.4} mm)",
+                        millimetres(*width)
+                    ),
+                    vec![item(*copper, None)],
+                ));
+            }
             Violation::Edge {
                 layer,
                 item: copper,

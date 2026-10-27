@@ -29,6 +29,13 @@ pub enum Violation {
         b: CopperItem,
         required: i32,
     },
+    /// A track narrower or wider than the rules for its copper allow.
+    TrackWidth {
+        item: CopperItem,
+        width: i32,
+        min: Option<i32>,
+        max: Option<i32>,
+    },
     /// Copper outside the board or closer to its edge than allowed.
     Edge { layer: LayerId, item: CopperItem },
     /// Copper where a keepout forbids it.

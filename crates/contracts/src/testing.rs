@@ -50,6 +50,7 @@ impl DesignBuilder {
                 edge_clearance: mm(0.2),
                 hole_clearance: 0,
                 hole_to_hole: 0,
+                min_track_width: 0,
                 custom: vec![],
             },
             resolution: 0,

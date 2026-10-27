@@ -51,12 +51,33 @@ pub fn verify(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Verdic
     });
     let mut violations: Vec<Violation> = found.into_iter().collect();
     violations.extend(holes_too_close(design, rules, routes));
+    violations.extend(widths_out_of_limits(rules, routes));
     violations.extend(edge_and_keepout_violations(design, rules, &pieces));
     violations.extend(dangling_ends(design, routes, &pieces));
     pieces::join_layers_of_the_same_item(&pieces, &mut joined);
     pieces::join_through_planes(design, rules, &pieces, &mut joined);
     violations.extend(unconnected(design, &pieces, &mut joined));
     Verdict { violations }
+}
+
+/// The tracks narrower or wider than the rules for their net allow, in order.
+fn widths_out_of_limits(rules: &ConstraintSet, routes: &Routes) -> Vec<Violation> {
+    routes
+        .tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, track)| {
+            let limits = rules.track_width_limits(track.net);
+            let too_narrow = limits.min.is_some_and(|min| track.width < min);
+            let too_wide = limits.max.is_some_and(|max| track.width > max);
+            (too_narrow || too_wide).then_some(Violation::TrackWidth {
+                item: CopperItem::Track(index),
+                width: track.width,
+                min: limits.min,
+                max: limits.max,
+            })
+        })
+        .collect()
 }
 
 /// The pairs of vias whose holes are closer than the hole-to-hole distance, in

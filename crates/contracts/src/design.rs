@@ -160,6 +160,10 @@ pub struct DesignRules {
     pub hole_clearance: i32,
     /// How far apart the holes of vias stay, whatever their nets.
     pub hole_to_hole: i32,
+    /// The narrowest a track may be, as the board's own settings state it; 0
+    /// where the format states none, as Specctra, whose class widths are the
+    /// widths to route at rather than limits.
+    pub min_track_width: i32,
     /// Rules for particular copper beyond those of its class, in the order the
     /// board states them: where several apply, the last one counts, and it
     /// overrides the class's and the board's values.
