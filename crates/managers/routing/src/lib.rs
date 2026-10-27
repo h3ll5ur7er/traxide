@@ -268,7 +268,7 @@ pub fn route(
         cut_off,
     } = router.route_plan(plan, corridors.as_ref(), &mut layout, cancel, events);
     let mut routes = joins.copper.clone();
-    routes.extend(escaped.copper_used(&unrouted));
+    routes.extend(escaped.copper_used(&unrouted, &routed));
     routes.extend(routed);
     let verification_rules = traxide_rules::compile(&design, Purpose::Verification);
     let mut total = total;
