@@ -175,7 +175,9 @@ fn involves_new_copper(violation: &Violation, existing: &Routes) -> bool {
         Violation::Clearance { a, b, .. } | Violation::HoleToHole { a, b, .. } => {
             is_new(a) || is_new(b)
         }
-        Violation::Edge { item, .. } | Violation::Keepout { item, .. } => is_new(item),
+        Violation::Edge { item, .. }
+        | Violation::Keepout { item, .. }
+        | Violation::Dangling { item, .. } => is_new(item),
         Violation::Unconnected { .. } => true,
     }
 }
@@ -266,7 +268,7 @@ pub fn route(
         cut_off,
     } = router.route_plan(plan, corridors.as_ref(), &mut layout, cancel, events);
     let mut routes = joins.copper.clone();
-    routes.extend(escaped.copper_used(&unrouted));
+    routes.extend(escaped.copper_used(&unrouted, &routed));
     routes.extend(routed);
     let verification_rules = traxide_rules::compile(&design, Purpose::Verification);
     let mut total = total;

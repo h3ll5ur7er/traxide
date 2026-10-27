@@ -1,3 +1,4 @@
+use crate::geometry::Point;
 use crate::{LayerId, NetId, PadId};
 
 /// What verification found wrong with a routed design; empty when all is well.
@@ -32,6 +33,13 @@ pub enum Violation {
     Edge { layer: LayerId, item: CopperItem },
     /// Copper where a keepout forbids it.
     Keepout { layer: LayerId, item: CopperItem },
+    /// A track end that touches no other copper of its net: a stub that
+    /// leads nowhere, an antenna.
+    Dangling {
+        layer: LayerId,
+        item: CopperItem,
+        at: Point,
+    },
     /// Pads of a net that copper does not join to the net's first pad.
     Unconnected { net: NetId, pads: Vec<PadId> },
 }

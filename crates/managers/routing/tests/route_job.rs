@@ -113,7 +113,8 @@ fn an_unknown_net_class_to_leave_unrouted_is_an_error_naming_the_known_ones() {
 
 #[test]
 fn rules_the_board_broke_before_routing_are_not_counted_as_the_routers() {
-    // An existing track of Across crosses a pad of Down.
+    // An existing track of Across crosses a pad of Down, and both its ends
+    // touch nothing of Across.
     let folder = tempfile::tempdir().expect("temp dir");
     let output = folder.path().join("board.ses");
     let report = route(
@@ -122,7 +123,7 @@ fn rules_the_board_broke_before_routing_are_not_counted_as_the_routers() {
         &CancelToken::new(),
     )
     .expect("routable");
-    assert_eq!(report.violations_before_routing, 1);
+    assert_eq!(report.violations_before_routing, 3);
     assert!(
         report
             .verdict
@@ -162,7 +163,11 @@ fn the_drc_report_judges_the_stored_copper_with_the_boards_own() {
         .iter()
         .map(|v| &v["type"])
         .collect();
-    assert_eq!(types, ["clearance"], "the board's own track over a pad");
+    assert_eq!(
+        types,
+        ["clearance", "track_dangling", "track_dangling"],
+        "the board's own track over a pad, ending in nothing"
+    );
     assert_eq!(
         drc["unconnected_items"].as_array().map(Vec::len),
         Some(unconnected_pads)

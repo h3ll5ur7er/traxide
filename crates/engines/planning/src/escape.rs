@@ -57,8 +57,9 @@ impl Escaped {
     /// The stubs that a routed connection starts from: a stub all of whose
     /// connections are among `unrouted` would only dangle, and one that lies
     /// on a lane of the board's wiring would end dangling in its middle, as
-    /// the lane leads the pin out already.
-    pub fn copper_used(&self, unrouted: &[Connection]) -> Routes {
+    /// the lane leads the pin out already. Each ends where the copper of
+    /// `routes` or of the board's wiring farthest from its pin joins it.
+    pub fn copper_used(&self, unrouted: &[Connection], routes: &Routes) -> Routes {
         let tracks = self
             .escapes
             .iter()
@@ -72,7 +73,12 @@ impl Escaped {
             })
             .map(|(_, escape)| &escape.stub)
             .filter(|stub| !self.is_wired_along(stub))
-            .cloned()
+            .filter_map(|stub| {
+                trimmed(
+                    stub,
+                    routes.tracks.iter().chain(&self.design.existing.tracks),
+                )
+            })
             .collect();
         Routes {
             tracks,
@@ -109,6 +115,40 @@ impl Escaped {
         self.design.nets[net.index()].pads.push(end);
         end
     }
+}
+
+/// `stub` up to the point of `tracks` on it farthest from its pin, as the pad
+/// at its end is all of its copper: a route may join it anywhere, or run
+/// along it from the pin and leave it at a bend, as may the board's wiring,
+/// and beyond that the stub would lead nowhere. Unchanged where no track
+/// touches it; none where they all touch it at the pin.
+fn trimmed<'t>(stub: &Track, tracks: impl Iterator<Item = &'t Track>) -> Option<Track> {
+    let [pin, end] = [stub.path[0], stub.path[1]];
+    let along = Segment::new(pin, end);
+    let (dx, dy) = (f64::from(end.x - pin.x), f64::from(end.y - pin.y));
+    let length_squared = dx * dx + dy * dy;
+    let farthest = tracks
+        .filter(|t| t.net == stub.net && t.layer == stub.layer)
+        .flat_map(|t| t.path.iter().map(|&at| (at, t.width)))
+        .filter(|&(at, width)| {
+            along.is_point_closer_than(at, i64::from((stub.width + width) / 2) + 1)
+        })
+        .map(|(at, _)| {
+            let t = (f64::from(at.x - pin.x) * dx + f64::from(at.y - pin.y) * dy) / length_squared;
+            t.clamp(0.0, 1.0)
+        })
+        .reduce(f64::max);
+    let Some(farthest) = farthest else {
+        return Some(stub.clone());
+    };
+    let cut = Point::new(
+        pin.x + (dx * farthest).round() as i32,
+        pin.y + (dy * farthest).round() as i32,
+    );
+    (cut != pin).then(|| Track {
+        path: vec![pin, cut],
+        ..stub.clone()
+    })
 }
 
 /// Escapes the pins of fine-pitch parts, part by part and along their rows,
@@ -349,7 +389,7 @@ mod tests {
     fn the_escape_is_a_stub_from_the_pin_to_where_its_connections_start() {
         let design = chip(8).build();
         let escaped = escaped(&design);
-        let copper = escaped.copper_used(&[]);
+        let copper = escaped.copper_used(&[], &Routes::default());
         assert_eq!((copper.tracks.len(), copper.vias.len()), (16, 0));
         let start = start_of(&escaped, "N1").position;
         let pin = design.pad(design.pad_named("U1-1")).position;
@@ -395,15 +435,72 @@ mod tests {
     }
 
     #[test]
+    fn a_stub_ends_where_the_route_farthest_from_its_pin_joins_it() {
+        // The pad at a stub's end is all of the stub, so a route may join it
+        // anywhere; beyond that the stub would lead nowhere.
+        let design = chip(8).build();
+        let escaped = escaped(&design);
+        let n1 = design.net_named("N1");
+        let pin = design.pad(design.pad_named("U1-1")).position;
+        let start = start_of(&escaped, "N1").position;
+        let middle = Point::new(pin.x, (pin.y + start.y) / 2);
+        let route = Routes {
+            tracks: vec![Track {
+                net: n1,
+                layer: traxide_contracts::LayerId(0),
+                width: mm(0.2),
+                path: vec![Point::new(middle.x - mm(2.0), middle.y), middle],
+            }],
+            vias: Vec::new(),
+        };
+        let copper = escaped.copper_used(&[], &route);
+        let stub = copper
+            .tracks
+            .iter()
+            .find(|t| t.net == n1)
+            .expect("N1's stub");
+        assert_eq!(stub.path, [pin, middle]);
+    }
+
+    #[test]
+    fn a_stub_ends_where_the_boards_wiring_leading_from_its_pin_bends_off_it() {
+        let mut design = chip(8).build();
+        let n1 = design.net_named("N1");
+        let pin = design.pad(design.pad_named("U1-1")).position;
+        let start = start_of(&escaped(&design), "N1").position;
+        let bend = Point::new(pin.x, (pin.y + start.y) / 2);
+        design.existing.tracks.push(Track {
+            net: n1,
+            layer: traxide_contracts::LayerId(0),
+            width: mm(0.2),
+            path: vec![pin, bend, Point::new(bend.x - mm(2.0), bend.y)],
+        });
+        let escaped = escaped(&design);
+        let copper = escaped.copper_used(&[], &Routes::default());
+        let stub = copper.tracks.iter().find(|t| t.net == n1);
+        assert!(stub.is_none_or(|s| s.path == [pin, bend]), "{stub:?}");
+    }
+
+    #[test]
     fn escapes_keep_their_clearance_from_each_other_and_the_pins() {
         let design = chip(8).build();
         let escaped = escaped(&design);
         let rules = traxide_rules::compile(&design, Purpose::Verification);
-        let verdict = traxide_verification::verify(&design, &rules, &escaped.copper_used(&[]));
+        let verdict = traxide_verification::verify(
+            &design,
+            &rules,
+            &escaped.copper_used(&[], &Routes::default()),
+        );
+        // Nothing is routed from the stubs yet, so they end in nothing.
         let broken: Vec<&Violation> = verdict
             .violations
             .iter()
-            .filter(|v| !matches!(v, Violation::Unconnected { .. }))
+            .filter(|v| {
+                !matches!(
+                    v,
+                    Violation::Unconnected { .. } | Violation::Dangling { .. }
+                )
+            })
             .collect();
         assert!(broken.is_empty(), "{broken:?}");
     }
@@ -482,7 +579,7 @@ mod tests {
             .copied()
             .filter(|c| c.net == n1)
             .collect();
-        let copper = escaped.copper_used(&failed);
+        let copper = escaped.copper_used(&failed, &Routes::default());
         assert_eq!(copper.tracks.len(), 15);
         assert!(copper.tracks.iter().all(|t| t.net != n1));
     }
@@ -499,7 +596,7 @@ mod tests {
         });
         let escaped = escaped(&design);
         let n1 = escaped.design.net_named("N1");
-        let copper = escaped.copper_used(&[]);
+        let copper = escaped.copper_used(&[], &Routes::default());
         assert_eq!(copper.tracks.len(), 15);
         assert!(copper.tracks.iter().all(|t| t.net != n1));
     }

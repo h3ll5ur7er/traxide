@@ -61,6 +61,17 @@ pub(crate) fn report(
                 "Items not allowed",
                 vec![item(*copper, Some(*layer))],
             )),
+            // KiCad's default severity for a dangling track is a warning.
+            Violation::Dangling {
+                layer,
+                item: copper,
+                ..
+            } => violations.push(json!({
+                "type": "track_dangling",
+                "description": "Track has unconnected end",
+                "severity": "warning",
+                "items": [item(*copper, Some(*layer))],
+            })),
             Violation::Unconnected { net, pads } => {
                 // traxide finds the pads copper leaves apart from the net's
                 // first pad; KiCad lists missing connections in pairs.

@@ -12,7 +12,8 @@ use pieces::Piece;
 use std::collections::BTreeSet;
 use traxide_contracts::geometry::Point;
 use traxide_contracts::{
-    ConstraintSet, CopperItem, Design, KeepoutScope, NetId, PadId, Routes, Verdict, Violation,
+    ConstraintSet, CopperItem, Design, KeepoutScope, LayerId, NetId, PadId, Routes, Verdict,
+    Violation,
 };
 use unions::Unions;
 
@@ -51,6 +52,7 @@ pub fn verify(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Verdic
     let mut violations: Vec<Violation> = found.into_iter().collect();
     violations.extend(holes_too_close(design, rules, routes));
     violations.extend(edge_and_keepout_violations(design, rules, &pieces));
+    violations.extend(dangling_ends(design, routes, &pieces));
     pieces::join_layers_of_the_same_item(&pieces, &mut joined);
     pieces::join_through_planes(design, rules, &pieces, &mut joined);
     violations.extend(unconnected(design, &pieces, &mut joined));
@@ -190,6 +192,63 @@ fn edge_and_keepout_violations(
         }
     }
     violations.into_iter().collect()
+}
+
+/// The ends of tracks whose round end touches no other copper of their net on
+/// their layer and lies in no pour of their net there, which KiCad's fill
+/// would join to them; in the order of their layer, track and position.
+fn dangling_ends(design: &Design, routes: &Routes, pieces: &[Piece]) -> Vec<Violation> {
+    let widest = routes.tracks.iter().map(|t| t.width).max().unwrap_or(0);
+    let mut ends: Vec<(LayerId, Point, usize)> = Vec::new();
+    for (index, track) in routes.tracks.iter().enumerate() {
+        if let [first, .., last] = track.path[..] {
+            ends.push((track.layer, first, index));
+            ends.push((track.layer, last, index));
+        }
+    }
+    ends.sort_by_key(|&(layer, at, track)| (layer, at.x, at.y, track));
+    let mut touched = vec![false; ends.len()];
+    for piece in pieces {
+        let Some(net) = piece.net else { continue };
+        let reach = piece.bounds.inflated(widest / 2);
+        let first =
+            ends.partition_point(|&(layer, at, _)| (layer, at.x) < (piece.layer, reach.min.x));
+        for (offset, &(layer, at, track)) in ends[first..].iter().enumerate() {
+            if layer != piece.layer || at.x > reach.max.x {
+                break;
+            }
+            let end = &routes.tracks[track];
+            if end.net == net
+                && piece.item != CopperItem::Track(track)
+                && reach.contains(at)
+                && piece.shape.nearest_point(at).distance(at) <= i64::from(end.width / 2)
+            {
+                touched[first + offset] = true;
+            }
+        }
+    }
+    let in_a_pour = |net: NetId, layer: LayerId, at: Point| {
+        design.planes.iter().any(|plane| {
+            plane.net == net
+                && plane.layer == layer
+                && plane.outline.contains(at)
+                && !plane.holes.iter().any(|hole| hole.contains(at))
+        })
+    };
+    let mut dangling: Vec<Violation> = ends
+        .into_iter()
+        .zip(touched)
+        .filter(|&((layer, at, track), touched)| {
+            !touched && !in_a_pour(routes.tracks[track].net, layer, at)
+        })
+        .map(|((layer, at, track), _)| Violation::Dangling {
+            layer,
+            item: CopperItem::Track(track),
+            at,
+        })
+        .collect();
+    dangling.sort();
+    dangling
 }
 
 fn unconnected(design: &Design, pieces: &[Piece], joined: &mut Unions) -> Vec<Violation> {

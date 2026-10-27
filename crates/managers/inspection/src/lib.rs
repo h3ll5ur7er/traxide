@@ -52,6 +52,7 @@ fn kind(violation: &Violation) -> &'static str {
         Violation::HoleToHole { .. } => "hole to hole",
         Violation::Edge { .. } => "edge",
         Violation::Keepout { .. } => "keepout",
+        Violation::Dangling { .. } => "dangling",
         Violation::Unconnected { .. } => "unconnected",
     }
 }

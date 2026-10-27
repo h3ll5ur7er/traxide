@@ -88,10 +88,13 @@ fn route(design: &Design, pairs: &[(&str, &str)]) -> RoutingResult {
     route_with(design, &profile(), pairs)
 }
 
-/// The routes break no rule, judged by the independent Verification Engine.
+/// The routes break no rule, with the board's own wiring, judged by the
+/// independent Verification Engine.
 fn assert_legal(design: &Design, routes: &Routes) {
     let rules = traxide_rules::compile(design, Purpose::Verification);
-    let verdict = traxide_verification::verify(design, &rules, routes);
+    let mut everything = design.existing.clone();
+    everything.extend(routes.clone());
+    let verdict = traxide_verification::verify(design, &rules, &everything);
     let broken: Vec<_> = verdict
         .violations
         .iter()
@@ -972,6 +975,41 @@ fn a_pin_off_the_grid_is_left_by_an_octilinear_stub_along_its_axis() {
         "{path:?}"
     );
     assert_legal(&design, &routes);
+}
+
+#[test]
+fn a_route_between_two_pins_off_the_grid_leaves_no_stub_at_either() {
+    // Both ends are reached along their pins' axes, by a stub with a jog onto
+    // the grid; the one the search finishes at must run from the grid into
+    // the pin, not into the pin and back out.
+    let mut builder = DesignBuilder::new(20.0, 12.0);
+    for (row, y) in [("U1", 3.05), ("U2", 9.05)] {
+        for pin in 0..5 {
+            let net = if pin == 2 {
+                "A".to_owned()
+            } else {
+                format!("{row}P{pin}")
+            };
+            builder = builder.smd(
+                &format!("{row}.{pin}"),
+                Some(&net),
+                at(9.25 + 0.4 * f64::from(pin), y),
+                0.2,
+                0,
+            );
+        }
+    }
+    // A wall between the rows, so that no straight line joins them.
+    let design = builder
+        .keepout(
+            wall(at(8.0, 5.5), at(12.0, 6.5)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("U1.2", "U2.2")]);
+    assert!(result.unrouted.is_empty());
+    assert_legal(&design, &result.routes);
 }
 
 /// Ten nets on one layer without vias, pads scattered over a 10 × 10 grid at
