@@ -5,7 +5,7 @@ mod custom;
 
 use custom::{Groups, Rules};
 use traxide_contracts::{
-    Constraint, ConstraintSet, Design, Limits, NetClassId, ViaKind, ViaKindId,
+    Constraint, ConstraintSet, Design, Limits, NetClassId, ViaKind, ViaKindId, ViaLimits,
 };
 
 /// What the compiled rules are for.
@@ -123,21 +123,51 @@ pub fn compile(design: &Design, purpose: Purpose) -> ConstraintSet {
     })
     .with_track_width_limits(
         ids.iter()
-            .map(|&group| track_width_limits(design, &rules, group))
+            .map(|&group| {
+                limits_to_judge_by(
+                    &rules,
+                    Constraint::TrackWidth,
+                    group,
+                    design.rules.min_track_width,
+                )
+            })
+            .collect(),
+    )
+    .with_via_limits(
+        ids.iter()
+            .map(|&group| ViaLimits {
+                diameter: limits_to_judge_by(
+                    &rules,
+                    Constraint::ViaDiameter,
+                    group,
+                    design.rules.min_via_diameter,
+                ),
+                drill: limits_to_judge_by(
+                    &rules,
+                    Constraint::HoleSize,
+                    group,
+                    design.rules.min_via_drill,
+                ),
+            })
             .collect(),
     )
 }
 
-/// How narrow and how wide the tracks of `group` may be: the board's minimum,
-/// and the last rule that surely applies to them. A rule that only may apply,
-/// as the reader could not tell, limits nothing to judge by.
-fn track_width_limits(design: &Design, rules: &Rules, group: NetClassId) -> Limits {
+/// The limits `constraint` sets on the copper of `group`: the board's
+/// minimum, and the last rule that surely applies to it. A rule that only
+/// may apply, as the reader could not tell, limits nothing to judge by.
+fn limits_to_judge_by(
+    rules: &Rules,
+    constraint: Constraint,
+    group: NetClassId,
+    board_minimum: i32,
+) -> Limits {
     let stated = rules
-        .of(Constraint::TrackWidth, group)
+        .of(constraint, group)
         .last
         .copied()
         .unwrap_or_default();
-    let board = Some(design.rules.min_track_width).filter(|&min| min > 0);
+    let board = Some(board_minimum).filter(|&min| min > 0);
     Limits {
         min: stated.min.max(board),
         opt: None,
@@ -232,6 +262,8 @@ mod tests {
                 hole_clearance: 0,
                 hole_to_hole: 0,
                 min_track_width: 0,
+                min_via_diameter: 0,
+                min_via_drill: 0,
                 custom: vec![],
             },
             resolution,

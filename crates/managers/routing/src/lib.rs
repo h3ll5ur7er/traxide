@@ -176,6 +176,8 @@ fn involves_new_copper(violation: &Violation, existing: &Routes) -> bool {
             is_new(a) || is_new(b)
         }
         Violation::TrackWidth { item, .. }
+        | Violation::ViaDiameter { item, .. }
+        | Violation::HoleSize { item, .. }
         | Violation::Edge { item, .. }
         | Violation::Keepout { item, .. }
         | Violation::Dangling { item, .. } => is_new(item),

@@ -16,6 +16,9 @@ pub(crate) struct Project {
     min_clearance: i32,
     /// The narrowest a track may be, whatever its class.
     pub min_track_width: i32,
+    /// The smallest a via may be across, and its drill.
+    pub min_via_diameter: i32,
+    pub min_via_drill: i32,
     assignments: HashMap<String, String>,
     patterns: Vec<(String, String)>,
 }
@@ -54,8 +57,11 @@ const DEFAULT_VIA_DIAMETER: f64 = 0.6;
 const DEFAULT_VIA_DRILL: f64 = 0.3;
 const DEFAULT_EDGE_CLEARANCE: f64 = 0.5;
 const DEFAULT_HOLE_CLEARANCE: f64 = 0.25;
-/// What a new KiCad 10 project states as the narrowest track.
+/// What a new KiCad 10 project states as the narrowest track, the smallest
+/// via and the smallest through hole.
 const DEFAULT_MIN_TRACK_WIDTH: f64 = 0.2;
+const DEFAULT_MIN_VIA_DIAMETER: f64 = 0.5;
+const DEFAULT_MIN_THROUGH_HOLE: f64 = 0.3;
 /// KiCad's default minimum between holes, which JLCPCB asks too.
 const DEFAULT_HOLE_TO_HOLE: f64 = 0.25;
 
@@ -137,6 +143,11 @@ impl Project {
             hole_to_hole: nanometres(minimum("min_hole_to_hole", DEFAULT_HOLE_TO_HOLE)),
             min_clearance,
             min_track_width,
+            min_via_diameter: nanometres(minimum("min_via_diameter", DEFAULT_MIN_VIA_DIAMETER)),
+            min_via_drill: nanometres(minimum(
+                "min_through_hole_diameter",
+                DEFAULT_MIN_THROUGH_HOLE,
+            )),
             assignments,
             patterns,
         })
@@ -267,6 +278,11 @@ mod tests {
         assert_eq!(project.hole_clearance, 400_000);
         // Kept on its own too, as the limit verification judges widths by.
         assert_eq!(project.min_track_width, 150_000);
+        // KiCad 10's defaults where the project leaves them out.
+        assert_eq!(
+            (project.min_via_diameter, project.min_via_drill),
+            (500_000, 300_000)
+        );
     }
 
     #[test]

@@ -572,6 +572,8 @@ impl<'a> DsnReader<'a> {
                 // A DSN carries none: KiCad's default, which JLCPCB asks too.
                 hole_to_hole: 250_000,
                 min_track_width: 0,
+                min_via_diameter: 0,
+                min_via_drill: 0,
                 custom: vec![],
             },
             class_of_net,

@@ -164,6 +164,10 @@ pub struct DesignRules {
     /// where the format states none, as Specctra, whose class widths are the
     /// widths to route at rather than limits.
     pub min_track_width: i32,
+    /// The smallest a via's copper may be across, and its drill; 0 where the
+    /// format states none.
+    pub min_via_diameter: i32,
+    pub min_via_drill: i32,
     /// Rules for particular copper beyond those of its class, in the order the
     /// board states them: where several apply, the last one counts, and it
     /// overrides the class's and the board's values.

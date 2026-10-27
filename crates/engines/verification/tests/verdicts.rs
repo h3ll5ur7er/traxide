@@ -708,3 +708,88 @@ fn a_class_width_alone_limits_nothing() {
     };
     assert_eq!(check(&design, routes), Verdict::default());
 }
+
+/// Net A from A1 to A2 on the top layer, through a via at (10, 5) mm and a
+/// stretch on the bottom layer.
+fn through_a_via(design: &Design) -> Routes {
+    Routes {
+        tracks: vec![
+            track(design, "A", 0, &[at(2.0, 5.0), at(10.0, 5.0)]),
+            track(design, "A", 1, &[at(10.0, 5.0), at(12.0, 5.0)]),
+            track(design, "A", 0, &[at(12.0, 5.0), at(18.0, 5.0)]),
+        ],
+        vias: vec![
+            via(design, "A", at(10.0, 5.0)),
+            via(design, "A", at(12.0, 5.0)),
+        ],
+    }
+}
+
+#[test]
+fn a_via_smaller_than_the_boards_minimums_breaks_the_via_rules() {
+    // The design's via is 0.6 mm across with a 0.3 mm drill.
+    let mut design = board();
+    design.rules.min_via_diameter = mm(0.7);
+    design.rules.min_via_drill = mm(0.35);
+    let violations = check(&design, through_a_via(&design)).violations;
+    assert_eq!(
+        violations,
+        [
+            Violation::ViaDiameter {
+                item: CopperItem::Via(0),
+                diameter: mm(0.6),
+                min: Some(mm(0.7)),
+                max: None
+            },
+            Violation::ViaDiameter {
+                item: CopperItem::Via(1),
+                diameter: mm(0.6),
+                min: Some(mm(0.7)),
+                max: None
+            },
+            Violation::HoleSize {
+                item: CopperItem::Via(0),
+                drill: mm(0.3),
+                min: Some(mm(0.35)),
+                max: None
+            },
+            Violation::HoleSize {
+                item: CopperItem::Via(1),
+                drill: mm(0.3),
+                min: Some(mm(0.35)),
+                max: None
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_custom_rule_sets_the_via_limits_of_the_copper_it_names() {
+    let mut design = board();
+    let a = design.net_named("A");
+    design.rules.custom.push(traxide_contracts::CustomRule {
+        name: "small vias".into(),
+        condition: traxide_contracts::Condition::NetIn {
+            item: traxide_contracts::Item::A,
+            nets: vec![Some(a)],
+        },
+        constraint: traxide_contracts::Constraint::ViaDiameter,
+        limits: traxide_contracts::Limits {
+            min: None,
+            opt: None,
+            max: Some(mm(0.5)),
+        },
+    });
+    let diameters: Vec<_> = check(&design, through_a_via(&design))
+        .violations
+        .into_iter()
+        .filter(|v| matches!(v, Violation::ViaDiameter { .. }))
+        .collect();
+    assert_eq!(diameters.len(), 2, "{diameters:?}");
+}
+
+#[test]
+fn vias_of_a_design_without_via_limits_break_no_via_rule() {
+    let design = board();
+    assert_eq!(check(&design, through_a_via(&design)), Verdict::default());
+}

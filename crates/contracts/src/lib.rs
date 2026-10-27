@@ -17,7 +17,7 @@ mod routes;
 pub mod testing;
 mod verdict;
 
-pub use constraints::ConstraintSet;
+pub use constraints::{ConstraintSet, ViaLimits};
 pub use corridors::Corridors;
 pub use design::{
     Condition, Constraint, CustomRule, Design, DesignRules, Item, Keepout, KeepoutScope, Layer,

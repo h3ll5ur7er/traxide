@@ -51,6 +51,8 @@ impl DesignBuilder {
                 hole_clearance: 0,
                 hole_to_hole: 0,
                 min_track_width: 0,
+                min_via_diameter: 0,
+                min_via_drill: 0,
                 custom: vec![],
             },
             resolution: 0,

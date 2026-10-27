@@ -50,21 +50,34 @@ pub(crate) fn report(
                 width,
                 min,
                 max,
-            } => {
-                let limit = match (min, max) {
-                    (Some(min), _) if width < min => format!("min {:.4} mm", millimetres(*min)),
-                    (_, Some(max)) => format!("max {:.4} mm", millimetres(*max)),
-                    _ => String::new(),
-                };
-                violations.push(entry(
-                    "track_width",
-                    &format!(
-                        "Track width ({limit}; actual {:.4} mm)",
-                        millimetres(*width)
-                    ),
-                    vec![item(*copper, None)],
-                ));
-            }
+            } => violations.push(entry(
+                "track_width",
+                &format!("Track width ({})", out_of_limits(*width, *min, *max)),
+                vec![item(*copper, None)],
+            )),
+            Violation::ViaDiameter {
+                item: copper,
+                diameter,
+                min,
+                max,
+            } => violations.push(entry(
+                "via_diameter",
+                &format!("Via diameter ({})", out_of_limits(*diameter, *min, *max)),
+                vec![item(*copper, None)],
+            )),
+            Violation::HoleSize {
+                item: copper,
+                drill,
+                min,
+                max,
+            } => violations.push(entry(
+                "drill_out_of_range",
+                &format!(
+                    "Hole size out of range ({})",
+                    out_of_limits(*drill, *min, *max)
+                ),
+                vec![item(*copper, None)],
+            )),
             Violation::Edge {
                 layer,
                 item: copper,
@@ -121,6 +134,16 @@ pub(crate) fn report(
         "unconnected_items": unconnected_items,
         "schematic_parity": [],
     })
+}
+
+/// The limit `value` breaks and the value itself, as KiCad words them.
+fn out_of_limits(value: i32, min: Option<i32>, max: Option<i32>) -> String {
+    let limit = match (min, max) {
+        (Some(min), _) if value < min => format!("min {:.4} mm; ", millimetres(min)),
+        (_, Some(max)) => format!("max {:.4} mm; ", millimetres(max)),
+        _ => String::new(),
+    };
+    format!("{limit}actual {:.4} mm", millimetres(value))
 }
 
 /// Every violation traxide finds breaks a rule: KiCad's `error`.
