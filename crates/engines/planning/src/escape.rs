@@ -400,10 +400,16 @@ mod tests {
         let escaped = escaped(&design);
         let rules = traxide_rules::compile(&design, Purpose::Verification);
         let verdict = traxide_verification::verify(&design, &rules, &escaped.copper_used(&[]));
+        // Nothing is routed from the stubs yet, so they end in nothing.
         let broken: Vec<&Violation> = verdict
             .violations
             .iter()
-            .filter(|v| !matches!(v, Violation::Unconnected { .. }))
+            .filter(|v| {
+                !matches!(
+                    v,
+                    Violation::Unconnected { .. } | Violation::Dangling { .. }
+                )
+            })
             .collect();
         assert!(broken.is_empty(), "{broken:?}");
     }

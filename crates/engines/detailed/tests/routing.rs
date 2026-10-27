@@ -88,10 +88,13 @@ fn route(design: &Design, pairs: &[(&str, &str)]) -> RoutingResult {
     route_with(design, &profile(), pairs)
 }
 
-/// The routes break no rule, judged by the independent Verification Engine.
+/// The routes break no rule, with the board's own wiring, judged by the
+/// independent Verification Engine.
 fn assert_legal(design: &Design, routes: &Routes) {
     let rules = traxide_rules::compile(design, Purpose::Verification);
-    let verdict = traxide_verification::verify(design, &rules, routes);
+    let mut everything = design.existing.clone();
+    everything.extend(routes.clone());
+    let verdict = traxide_verification::verify(design, &rules, &everything);
     let broken: Vec<_> = verdict
         .violations
         .iter()

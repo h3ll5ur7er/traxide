@@ -96,7 +96,11 @@ fn copper_that_breaks_a_rule_is_reported_by_kind() {
         drc_report: None,
     })
     .expect("readable");
-    assert_eq!(report.violations_by_kind(), [("clearance", 1)]);
+    // Its stray wire also ends in nothing at both ends.
+    assert_eq!(
+        report.violations_by_kind(),
+        [("clearance", 1), ("dangling", 2)]
+    );
 }
 
 #[test]
@@ -113,7 +117,9 @@ fn the_check_writes_a_drc_report_in_kicads_format_when_asked() {
         serde_json::from_str(&std::fs::read_to_string(drc).expect("written")).expect("JSON");
     assert_eq!(report["source"], "existing-violation.dsn");
     assert_eq!(report["violations"][0]["type"], "clearance");
-    assert_eq!(report["violations"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["violations"][1]["type"], "track_dangling");
+    assert_eq!(report["violations"][1]["severity"], "warning");
+    assert_eq!(report["violations"].as_array().map(Vec::len), Some(3));
     assert_eq!(
         report["unconnected_items"].as_array().map(Vec::len),
         Some(2),

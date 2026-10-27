@@ -177,7 +177,11 @@ fn copper_on_the_wrong_layer_does_not_connect() {
     };
     assert!(matches!(
         check(&design, routes).violations[..],
-        [Violation::Unconnected { .. }]
+        [
+            Violation::Dangling { .. },
+            Violation::Dangling { .. },
+            Violation::Unconnected { .. }
+        ]
     ));
 }
 
@@ -535,4 +539,90 @@ fn copper_keeps_the_edge_clearance_from_where_the_true_edge_may_lie() {
     assert!(!at_the_edge(check(&design, routes(&design))));
     design.outline_tolerance = tolerance;
     assert!(at_the_edge(check(&design, routes(&design))));
+}
+
+#[test]
+fn a_track_end_that_touches_no_copper_of_its_net_dangles() {
+    // A stub from the middle of A's route that ends in nothing.
+    let design = board();
+    let routes = Routes {
+        tracks: vec![
+            track(&design, "A", 0, &[at(2.0, 5.0), at(18.0, 5.0)]),
+            track(&design, "A", 0, &[at(10.0, 5.0), at(10.0, 3.0)]),
+        ],
+        vias: vec![],
+    };
+    assert_eq!(
+        check(&design, routes).violations,
+        [Violation::Dangling {
+            layer: LayerId(0),
+            item: CopperItem::Track(1),
+            at: at(10.0, 3.0)
+        }]
+    );
+}
+
+#[test]
+fn a_track_end_on_copper_of_another_net_or_layer_dangles() {
+    // A's stub ends on B1, but B1 is another net's; another stub runs on layer
+    // 1 from under A1, which is on layer 0 only.
+    let design = board();
+    let routes = Routes {
+        tracks: vec![
+            track(&design, "A", 0, &[at(2.0, 5.0), at(18.0, 5.0)]),
+            track(&design, "A", 0, &[at(10.0, 5.0), at(10.0, 8.0)]),
+            track(&design, "A", 1, &[at(2.0, 5.0), at(4.0, 5.0)]),
+        ],
+        vias: vec![],
+    };
+    let dangling: Vec<_> = check(&design, routes)
+        .violations
+        .into_iter()
+        .filter(|v| matches!(v, Violation::Dangling { .. }))
+        .collect();
+    assert_eq!(
+        dangling,
+        [
+            Violation::Dangling {
+                layer: LayerId(0),
+                item: CopperItem::Track(1),
+                at: at(10.0, 8.0)
+            },
+            Violation::Dangling {
+                layer: LayerId(1),
+                item: CopperItem::Track(2),
+                at: at(2.0, 5.0)
+            },
+            Violation::Dangling {
+                layer: LayerId(1),
+                item: CopperItem::Track(2),
+                at: at(4.0, 5.0)
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_track_end_in_a_pour_of_its_net_on_its_layer_does_not_dangle() {
+    // As KiCad's fill joins it, wherever routing left room for the pour.
+    let design = DesignBuilder::new(20.0, 10.0)
+        .plane("GND", 0, at(10.0, 0.0), at(20.0, 10.0))
+        .smd("G1", Some("GND"), at(2.0, 5.0), 1.0, 0)
+        .build();
+    let routes = Routes {
+        tracks: vec![track(&design, "GND", 0, &[at(2.0, 5.0), at(15.0, 5.0)])],
+        vias: vec![],
+    };
+    assert_eq!(check(&design, routes), Verdict::default());
+}
+
+#[test]
+fn a_track_end_just_off_a_pads_edge_that_its_width_overlaps_does_not_dangle() {
+    // A session's resolution moves an end on the pad's edge off it by a step.
+    let design = board();
+    let routes = Routes {
+        tracks: vec![track(&design, "A", 0, &[at(2.55, 5.0), at(17.45, 5.0)])],
+        vias: vec![],
+    };
+    assert_eq!(check(&design, routes), Verdict::default());
 }

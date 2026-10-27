@@ -175,7 +175,9 @@ fn involves_new_copper(violation: &Violation, existing: &Routes) -> bool {
         Violation::Clearance { a, b, .. } | Violation::HoleToHole { a, b, .. } => {
             is_new(a) || is_new(b)
         }
-        Violation::Edge { item, .. } | Violation::Keepout { item, .. } => is_new(item),
+        Violation::Edge { item, .. }
+        | Violation::Keepout { item, .. }
+        | Violation::Dangling { item, .. } => is_new(item),
         Violation::Unconnected { .. } => true,
     }
 }

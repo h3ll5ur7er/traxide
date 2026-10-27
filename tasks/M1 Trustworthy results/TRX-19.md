@@ -2,7 +2,7 @@
 id: TRX-19
 title: Check designs independently in the Verification Engine
 type: feature
-status: todo
+status: in-progress
 priority: high
 labels: [verification, drc]
 estimate: 5
@@ -15,7 +15,7 @@ The referee ([[Architecture/Volatilities]] V9): never shares clearance code with
 - [ ] Widths and via rules
 - [ ] Clearances of a type of object in DSN, such as `(clearance 6 (type wire_via))`: read only the general clearance, the judge is stricter than such a board and counts some of Freerouting's legal copper as broken rules (Issue143, Issue270 of the corpus)
 - [x] Unconnected pins
-- [ ] Dangling copper
+- [x] Dangling copper: a track end whose round end touches no other copper of its net on its layer, and lies in no pour of its net there, is a `Violation::Dangling`; KiCad's DRC report names it `track_dangling`, a warning, as KiCad does. Vias are not judged yet
 - [ ] Metrics: completion, total length, vias, per-net length
 - [ ] Parallel by tile
 - [x] Tested on boards with seeded violations
