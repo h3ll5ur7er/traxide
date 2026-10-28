@@ -24,11 +24,20 @@ pub fn verify(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Verdic
     // A set: one violation per pair of items, however many of their segments conflict.
     let mut found = BTreeSet::new();
     let mut joined = Unions::new(pieces.len());
+    // The layers on which other copper of its net touches each via.
+    let mut via_met: BTreeSet<(usize, LayerId)> = BTreeSet::new();
     for_each_pair_within(&pieces, rules.largest_clearance(), |i, j| {
         let (a, b) = (&pieces[i], &pieces[j]);
         if a.net.is_some() && a.net == b.net {
             if a.shape.is_closer_than(&b.shape, 1) {
                 joined.join(i, j);
+                for (via, other) in [(a, b), (b, a)] {
+                    if let CopperItem::Via(index) = via.item
+                        && other.item != via.item
+                    {
+                        via_met.insert((index, via.layer));
+                    }
+                }
             }
         } else if !(a.is_pad() && b.is_pad()) {
             // Pads too close to each other are the footprint's business, not
@@ -55,6 +64,7 @@ pub fn verify(design: &Design, rules: &ConstraintSet, routes: &Routes) -> Verdic
     violations.extend(vias_out_of_limits(design, rules, routes));
     violations.extend(edge_and_keepout_violations(design, rules, &pieces));
     violations.extend(dangling_ends(design, routes, &pieces));
+    violations.extend(dangling_vias(design, routes, &via_met));
     pieces::join_layers_of_the_same_item(&pieces, &mut joined);
     pieces::join_through_planes(design, rules, &pieces, &mut joined);
     violations.extend(unconnected(design, &pieces, &mut joined));
@@ -312,6 +322,52 @@ fn dangling_ends(design: &Design, routes: &Routes, pieces: &[Piece]) -> Vec<Viol
         })
         .collect();
     dangling.sort();
+    dangling
+}
+
+/// The vias that copper of their net, or a pour or plane of it, joins on fewer
+/// than two of their layers: a via that leads nowhere. Each is named on a
+/// layer it is joined on, else on its first.
+fn dangling_vias(
+    design: &Design,
+    routes: &Routes,
+    met: &BTreeSet<(usize, LayerId)>,
+) -> Vec<Violation> {
+    let in_a_pour = |net: NetId, layer: LayerId, at: Point| {
+        design.planes.iter().any(|plane| {
+            plane.net == net
+                && plane.layer == layer
+                && plane.outline.contains(at)
+                && !plane.holes.iter().any(|hole| hole.contains(at))
+        })
+    };
+    let mut dangling = Vec::new();
+    for (index, via) in routes.vias.iter().enumerate() {
+        let layers: Vec<LayerId> = design
+            .via_kind(via.kind)
+            .copper
+            .iter()
+            .map(|c| c.layer)
+            .collect();
+        let joined: Vec<LayerId> = layers
+            .iter()
+            .copied()
+            .filter(|&layer| {
+                met.contains(&(index, layer)) || in_a_pour(via.net, layer, via.position)
+            })
+            .collect();
+        if joined.len() < 2 {
+            dangling.push(Violation::Dangling {
+                layer: joined
+                    .first()
+                    .or(layers.first())
+                    .copied()
+                    .unwrap_or(LayerId(0)),
+                item: CopperItem::Via(index),
+                at: via.position,
+            });
+        }
+    }
     dangling
 }
 

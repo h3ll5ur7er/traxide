@@ -385,8 +385,14 @@ fn a_plane_joins_nothing_that_other_nets_copper_walls_off_from_its_fill() {
         tracks: vec![track(&design, "GND", 0, &[at(2.0, 5.0), at(3.0, 5.0)])],
         vias: [vec![via(&design, "GND", at(3.0, 5.0))], ring].concat(),
     };
+    // The ring's vias lead nowhere, and dangle too.
+    let unconnected: Vec<_> = check(&design, routes)
+        .violations
+        .into_iter()
+        .filter(|v| !matches!(v, Violation::Dangling { .. }))
+        .collect();
     assert_eq!(
-        check(&design, routes).violations,
+        unconnected,
         [Violation::Unconnected {
             net: design.net_named("GND"),
             pads: vec![design.pad_named("J1")]
@@ -792,4 +798,38 @@ fn a_custom_rule_sets_the_via_limits_of_the_copper_it_names() {
 fn vias_of_a_design_without_via_limits_break_no_via_rule() {
     let design = board();
     assert_eq!(check(&design, through_a_via(&design)), Verdict::default());
+}
+
+#[test]
+fn a_via_joined_on_one_layer_only_dangles() {
+    // A's route on the top layer, with a via on it that nothing meets below.
+    let design = board();
+    let routes = Routes {
+        tracks: vec![track(&design, "A", 0, &[at(2.0, 5.0), at(18.0, 5.0)])],
+        vias: vec![via(&design, "A", at(10.0, 5.0))],
+    };
+    assert_eq!(
+        check(&design, routes).violations,
+        [Violation::Dangling {
+            layer: LayerId(0),
+            item: CopperItem::Via(0),
+            at: at(10.0, 5.0)
+        }]
+    );
+}
+
+#[test]
+fn a_via_joined_on_two_layers_or_into_a_plane_does_not_dangle() {
+    // Through a via to the bottom layer and back; and a plane join, a track
+    // to a via onto the GND plane on the middle layer.
+    let design = board();
+    assert_eq!(check(&design, through_a_via(&design)), Verdict::default());
+    let design = board_with_a_plane()
+        .tht("J1", Some("GND"), at(8.0, 2.0), 1.6)
+        .build();
+    let routes = Routes {
+        tracks: vec![track(&design, "GND", 0, &[at(2.0, 5.0), at(3.0, 5.0)])],
+        vias: vec![via(&design, "GND", at(3.0, 5.0))],
+    };
+    assert_eq!(check(&design, routes), Verdict::default());
 }
