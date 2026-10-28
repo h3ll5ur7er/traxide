@@ -31,6 +31,9 @@ pub struct RouteJob {
     pub threads: Option<NonZeroUsize>,
     /// Net classes whose nets get no copper, such as those a plane will join.
     pub unrouted_net_classes: Vec<String>,
+    /// The only nets to route, by name, with the rest of the board kept as it
+    /// is; every net where empty.
+    pub nets: Vec<String>,
     /// Where to write a DRC report of the stored copper, the board's own
     /// included, in KiCad's JSON format, if anywhere.
     pub drc_report: Option<PathBuf>,
@@ -111,6 +114,8 @@ pub enum RouteError {
     Profile(#[from] ProfileError),
     #[error("no net class named {name}; there are {}", known.join(", "))]
     UnknownNetClass { name: String, known: Vec<String> },
+    #[error("the board has no net named {name}")]
+    UnknownNet { name: String },
     #[error(
         "routing the board's own wiring again works on a board file or a Specctra design; \
          in a running KiCad, delete the tracks to route again instead"
@@ -202,13 +207,26 @@ fn net_classes_named(design: &Design, names: &[String]) -> Result<Vec<NetClassId
         .collect()
 }
 
-/// `design` without the planes of nets in `classes`, which get no copper.
-fn without_planes_of(design: &Design, classes: &[NetClassId]) -> Design {
+/// The nets named, or every net where none are.
+fn nets_to_route(design: &Design, names: &[String]) -> Result<Vec<bool>, RouteError> {
+    if names.is_empty() {
+        return Ok(vec![true; design.nets.len()]);
+    }
+    let mut chosen = vec![false; design.nets.len()];
+    for name in names {
+        let index = (design.nets.iter())
+            .position(|net| &net.name == name)
+            .ok_or_else(|| RouteError::UnknownNet { name: name.clone() })?;
+        chosen[index] = true;
+    }
+    Ok(chosen)
+}
+
+/// `design` with the planes only of the nets routed, as the others get no
+/// copper.
+fn with_planes_of(design: &Design, is_routed: impl Fn(NetId) -> bool) -> Design {
     let mut design = design.clone();
-    let nets = &design.nets;
-    design
-        .planes
-        .retain(|plane| !classes.contains(&nets[plane.net.index()].class));
+    design.planes.retain(|plane| is_routed(plane.net));
     design
 }
 
@@ -239,12 +257,13 @@ pub fn route(
     let mut layout = Layout::build(&design, &rules);
     events.publish(Event::StageStarted(Stage::Planning));
     let skipped = net_classes_named(&design, &job.unrouted_net_classes)?;
+    let chosen = nets_to_route(&design, &job.nets)?;
+    let is_routed = |net: NetId| chosen[net.index()] && !skipped.contains(&design.net(net).class);
     let joins =
-        traxide_planning::join_planes(&without_planes_of(&design, &skipped), &rules, &mut layout);
+        traxide_planning::join_planes(&with_planes_of(&design, is_routed), &rules, &mut layout);
     let mut layout = Layout::build(&joins.design, &rules);
     let mut plan = traxide_planning::plan(&joins.design);
-    plan.connections
-        .retain(|c| !skipped.contains(&design.net(c.net).class));
+    plan.connections.retain(|c| is_routed(c.net));
     let escaped = traxide_planning::escape(&joins.design, &rules, &plan, &mut layout);
     // Built anew, the layout holds the escapes as pads of their nets, which
     // rip-up can never take from them.
@@ -279,7 +298,8 @@ pub fn route(
         let mut everything = design.existing.clone();
         everything.extend(routes.clone());
         let verdict = traxide_verification::verify(&design, &verification_rules, &everything);
-        let to_join = plane_pads_to_join(&design, &verdict);
+        let mut to_join = plane_pads_to_join(&design, &verdict);
+        to_join.retain(|c| is_routed(c.net));
         if !to_join.is_empty() {
             total += to_join.len();
             let joined = join_among(

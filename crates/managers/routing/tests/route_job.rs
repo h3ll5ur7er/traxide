@@ -19,6 +19,7 @@ fn job(input: &str, output: &std::path::Path) -> RouteJob {
         profile_file: None,
         threads: None,
         unrouted_net_classes: Vec::new(),
+        nets: Vec::new(),
         drc_report: None,
         time_limit: None,
         reroute_existing: false,
@@ -95,6 +96,48 @@ fn nets_of_the_net_classes_left_unrouted_get_no_copper() {
     let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
     assert_eq!((report.connections, report.unrouted.len()), (1, 0));
     assert_eq!(report.tracks, 1, "only Across, straight across");
+}
+
+#[test]
+fn only_the_nets_asked_for_get_copper() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let output = folder.path().join("board.ses");
+    let job = RouteJob {
+        nets: vec!["Down".into()],
+        ..job("two-nets.dsn", &output)
+    };
+    let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
+    assert_eq!((report.connections, report.unrouted.len()), (1, 0));
+    let session = std::fs::read_to_string(output).expect("stored");
+    assert!(session.contains("(net Down"), "{session}");
+    assert!(!session.contains("(net Across"), "{session}");
+}
+
+#[test]
+fn a_net_with_a_plane_left_unrouted_gets_no_copper_after_routing_either() {
+    // GND's pads join their plane by vias only when GND is routed: left out,
+    // they are no pads the plane walled off, to route by track.
+    let folder = tempfile::tempdir().expect("temp dir");
+    let output = folder.path().join("board.ses");
+    let job = RouteJob {
+        nets: vec!["Across".into()],
+        ..job("gnd-plane.dsn", &output)
+    };
+    let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
+    assert_eq!((report.connections, report.unrouted.len()), (1, 0));
+    let session = std::fs::read_to_string(output).expect("stored");
+    assert!(!session.contains("(net GND"), "{session}");
+}
+
+#[test]
+fn an_unknown_net_to_route_is_an_error() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let job = RouteJob {
+        nets: vec!["Dwon".into()],
+        ..job("two-nets.dsn", &folder.path().join("board.ses"))
+    };
+    let error = route(&job, &Silent, &CancelToken::new()).unwrap_err();
+    assert_eq!(error.to_string(), "the board has no net named Dwon");
 }
 
 #[test]

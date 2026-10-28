@@ -71,6 +71,7 @@ pub fn run(args: &[String]) -> Result<()> {
         profile_file: None,
         threads: None,
         unrouted_net_classes: Vec::new(),
+        nets: Vec::new(),
         drc_report: None,
         time_limit: None,
         reroute_existing: false,
