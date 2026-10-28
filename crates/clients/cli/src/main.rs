@@ -66,6 +66,10 @@ enum Command {
         /// KiCad or protected in the design (type fix or protect).
         #[arg(long, conflicts_with = "kicad")]
         reroute_existing: bool,
+        /// Route only this net, keeping the rest of the board as it is; give it
+        /// once for each net to route.
+        #[arg(long, value_name = "NAME")]
+        net: Vec<String>,
     },
     /// Check a board: how many of its nets are complete and which rules its
     /// copper breaks, with the routes of a session if one is given.
@@ -131,7 +135,7 @@ fn main() -> ExitCode {
 
 /// Routes or checks as `cli` says; a route writes its summary to `summary`.
 fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
-    let (input, output, profile, config, threads, quiet, drc, time_limit, reroute_existing) =
+    let (input, output, profile, config, threads, quiet, drc, time_limit, reroute_existing, nets) =
         match cli.command {
             Command::Freerouting { args } => return run_as_freerouting(&args),
             Command::Check {
@@ -161,6 +165,7 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
                 drc,
                 time_limit,
                 reroute_existing,
+                net,
             } => {
                 let input = input.unwrap_or_else(|| PathBuf::from(traxide_routing::RUNNING_KICAD));
                 (
@@ -173,6 +178,7 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
                     drc,
                     time_limit,
                     reroute_existing,
+                    net,
                 )
             }
         };
@@ -183,6 +189,7 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
         profile_file: config,
         threads,
         unrouted_net_classes: Vec::new(),
+        nets,
         drc_report: drc,
         time_limit,
         reroute_existing,

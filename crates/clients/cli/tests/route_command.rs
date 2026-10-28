@@ -47,6 +47,24 @@ fn routes_a_board_and_writes_a_session_next_to_it() {
 }
 
 #[test]
+fn routes_only_the_nets_named() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let input = copy_to(folder.path(), "two-nets.dsn");
+    let input = input.to_str().expect("utf-8");
+    let run = traxide(&["route", input, "--net", "Down", "--quiet"]);
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(run.status.success(), "{stdout}");
+    assert!(stdout.contains("Routed 1 of 1 connections"), "{stdout}");
+    let run = traxide(&["route", input, "--net", "Dwon", "--quiet"]);
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("no net named Dwon"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
 fn a_quiet_route_of_a_complete_board_prints_nothing_but_its_summary() {
     let folder = tempfile::tempdir().expect("temp dir");
     let input = copy_to(folder.path(), "two-nets.dsn");

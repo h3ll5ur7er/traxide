@@ -96,6 +96,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation> {
             profile_file: None,
             threads,
             unrouted_net_classes,
+            nets: Vec::new(),
             drc_report,
             time_limit: None,
             reroute_existing: false,
