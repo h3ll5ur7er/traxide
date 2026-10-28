@@ -31,9 +31,7 @@ pub struct RouteJob {
     pub threads: Option<NonZeroUsize>,
     /// Net classes whose nets get no copper, such as those a plane will join.
     pub unrouted_net_classes: Vec<String>,
-    /// The only nets to route, by name, with the rest of the board kept as it
-    /// is; every net where empty.
-    pub nets: Vec<String>,
+    pub nets: Nets,
     /// Where to write a DRC report of the stored copper, the board's own
     /// included, in KiCad's JSON format, if anywhere.
     pub drc_report: Option<PathBuf>,
@@ -43,6 +41,17 @@ pub struct RouteJob {
     /// Route the board's own wiring again, but for what the designer locked
     /// or protected: a designer's tracks are moved only when asked.
     pub reroute_existing: bool,
+}
+
+/// Which nets a job routes; the rest of the board is kept as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Nets {
+    All,
+    /// These, by name.
+    Named(Vec<String>),
+    /// Those of what is selected in KiCad's PCB editor, for the board open
+    /// there: the copper selected and the selected footprints' pads.
+    SelectedInKicad,
 }
 
 /// What a finished route job achieved.
@@ -121,6 +130,8 @@ pub enum RouteError {
          in a running KiCad, delete the tracks to route again instead"
     )]
     RerouteInRunningKicad,
+    #[error("only the board open in KiCad has a selection to route the nets of")]
+    SelectionOutsideKicad,
 }
 
 fn why_unrouted(
@@ -207,11 +218,13 @@ fn net_classes_named(design: &Design, names: &[String]) -> Result<Vec<NetClassId
         .collect()
 }
 
-/// The nets named, or every net where none are.
-fn nets_to_route(design: &Design, names: &[String]) -> Result<Vec<bool>, RouteError> {
-    if names.is_empty() {
-        return Ok(vec![true; design.nets.len()]);
-    }
+/// Which of the design's nets to route, by index.
+fn nets_to_route(design: &Design, nets: &Nets) -> Result<Vec<bool>, RouteError> {
+    let names = match nets {
+        Nets::All => return Ok(vec![true; design.nets.len()]),
+        Nets::Named(names) => names,
+        Nets::SelectedInKicad => &traxide_board_access::nets_selected_in_kicad()?,
+    };
     let mut chosen = vec![false; design.nets.len()];
     for name in names {
         let index = (design.nets.iter())
@@ -239,6 +252,9 @@ pub fn route(
     let started = Instant::now();
     let profile = traxide_profile_access::load_profile(&job.profile, job.profile_file.as_deref())?;
     events.publish(Event::StageStarted(Stage::Loading));
+    if job.nets == Nets::SelectedInKicad && job.input.as_os_str() != RUNNING_KICAD {
+        return Err(RouteError::SelectionOutsideKicad);
+    }
     let mut design = traxide_board_access::load_design(&job.input)?;
     if job.reroute_existing {
         if job.input.as_os_str() == RUNNING_KICAD {

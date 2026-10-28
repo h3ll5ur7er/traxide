@@ -7,7 +7,7 @@ traxide, a fast PCB autorouter for KiCad and every tool that speaks Specctra DSN
    - Linux: `traxide-kicad-…-x86_64-unknown-linux-musl.zip`, or `…-aarch64-unknown-linux-musl.zip` on ARM
    - Windows: `traxide-kicad-…-x86_64-pc-windows-msvc.zip`, or `…-aarch64-pc-windows-msvc.zip` on ARM
    - macOS: `traxide-kicad-…-macos-universal.zip`
-3. Restart the PCB editor and press **Route board** in its top toolbar. *Edit → Undo* takes the routes back; on a board with copper zones, which traxide refills around the routes, it takes two undos.
+3. Restart the PCB editor and press **Route board** in its top toolbar, or select some footprints or tracks and press **Route selected nets** beside it to route only their nets. *Edit → Undo* takes the routes back; on a board with copper zones, which traxide refills around the routes, it takes two undos.
 
 ## On the command line
 

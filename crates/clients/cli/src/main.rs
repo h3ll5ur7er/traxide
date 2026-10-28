@@ -12,7 +12,7 @@ use std::time::Duration;
 use traxide_contracts::{Event, Stage, Violation};
 use traxide_events::CancelToken;
 use traxide_inspection::CheckJob;
-use traxide_routing::{RouteJob, RouteReport, Unroutable};
+use traxide_routing::{Nets, RouteJob, RouteReport, Unroutable};
 
 /// A fast PCB autorouter.
 #[derive(Debug, Parser)]
@@ -29,7 +29,7 @@ enum Command {
     Route {
         /// The board: BOARD.kicad_pcb, with the rules of BOARD.kicad_pro, or a
         /// Specctra design (KiCad: File → Export → Specctra DSN).
-        #[arg(required_unless_present = "kicad")]
+        #[arg(required_unless_present_any = ["kicad", "selected"])]
         input: Option<PathBuf>,
         /// Route the board open in KiCad's PCB editor instead, through KiCad's API
         /// (Preferences → Plugins → Enable KiCad API), and add the routes to it as
@@ -70,6 +70,10 @@ enum Command {
         /// once for each net to route.
         #[arg(long, value_name = "NAME")]
         net: Vec<String>,
+        /// Route only the nets of what is selected in the board open in KiCad:
+        /// the tracks, vias, pads, footprints and zones selected; implies --kicad.
+        #[arg(long, conflicts_with_all = ["input", "net"])]
+        selected: bool,
     },
     /// Check a board: how many of its nets are complete and which rules its
     /// copper breaks, with the routes of a session if one is given.
@@ -105,7 +109,26 @@ const BROKE_A_RULE: u8 = 3;
 /// the environment. It shows each line the plugin writes to stderr as a
 /// notification, and ignores stdout, so the summary goes to stderr and no
 /// progress line is rewritten in place.
-const ROUTE_THE_BOARD_OPEN_IN_KICAD: [&str; 4] = ["traxide", "route", "--kicad", "--quiet"];
+const ROUTE_THE_BOARD_OPEN_IN_KICAD: &[&str] = &["traxide", "route", "--kicad", "--quiet"];
+
+/// The plugin's *Route selected nets* button starts a copy of traxide by this
+/// name, as each of a plugin's buttons needs an entry point of its own.
+const SELECTED_NETS_ENTRY_POINT: &str = "traxide-selected";
+
+const ROUTE_THE_NETS_SELECTED_IN_KICAD: &[&str] =
+    &["traxide", "route", "--kicad", "--quiet", "--selected"];
+
+/// What the plugin's button that started traxide as `program` does.
+fn button_started_as(program: &str) -> &'static [&'static str] {
+    if Path::new(program)
+        .file_stem()
+        .is_some_and(|name| name == SELECTED_NETS_ENTRY_POINT)
+    {
+        ROUTE_THE_NETS_SELECTED_IN_KICAD
+    } else {
+        ROUTE_THE_BOARD_OPEN_IN_KICAD
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -118,7 +141,7 @@ fn main() -> ExitCode {
         run_as_freerouting(&args[1..])
     } else if started_by_kicad {
         run(
-            Cli::parse_from(ROUTE_THE_BOARD_OPEN_IN_KICAD),
+            Cli::parse_from(button_started_as(&args[0])),
             &mut std::io::stderr(),
         )
     } else {
@@ -155,7 +178,8 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
             }
             Command::Route {
                 input,
-                // Clap lets through either a board or --kicad, never both.
+                // Clap lets through either a board or --kicad (or --selected),
+                // never both.
                 kicad: _,
                 output,
                 profile,
@@ -166,6 +190,7 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
                 time_limit,
                 reroute_existing,
                 net,
+                selected,
             } => {
                 let input = input.unwrap_or_else(|| PathBuf::from(traxide_routing::RUNNING_KICAD));
                 (
@@ -178,7 +203,13 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
                     drc,
                     time_limit,
                     reroute_existing,
-                    net,
+                    if selected {
+                        Nets::SelectedInKicad
+                    } else if net.is_empty() {
+                        Nets::All
+                    } else {
+                        Nets::Named(net)
+                    },
                 )
             }
         };
@@ -440,5 +471,25 @@ mod tests {
         let summary = summary(&report_into(false, true, "kb.routed.kicad_pcb"));
         assert!(summary.contains("Fill All Zones"), "{summary}");
         assert!(!self::summary(&report(false)).contains("Fill All Zones"));
+    }
+
+    #[test]
+    fn the_route_selected_nets_button_starts_traxide_by_another_name() {
+        for program in ["/plugins/traxide-selected", "traxide-selected.exe"] {
+            let button = Cli::try_parse_from(button_started_as(program)).expect("valid");
+            assert!(
+                matches!(button.command, Command::Route { selected: true, .. }),
+                "{program}"
+            );
+        }
+        let button = Cli::try_parse_from(button_started_as("/plugins/traxide")).expect("valid");
+        assert!(matches!(
+            button.command,
+            Command::Route {
+                selected: false,
+                kicad: true,
+                ..
+            }
+        ));
     }
 }

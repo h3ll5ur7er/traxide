@@ -1,6 +1,6 @@
 //! The KiCad plugin as a package for KiCad's Plugin and Content Manager, one
-//! per platform: `kicad-plugin/` with the platform's traxide as the action's
-//! entry point. *Install from File* unpacks `plugins/` and `resources/` into
+//! per platform: `kicad-plugin/` with a copy of the platform's traxide as each
+//! action's entry point, which traxide tells apart by its name. *Install from File* unpacks `plugins/` and `resources/` into
 //! KiCad's `3rdparty` folder.
 
 use anyhow::{Context, Result, bail, ensure};
@@ -37,10 +37,11 @@ impl Platform {
         }
     }
 
-    fn executable(self) -> &'static str {
+    /// The file of the executable `name` on the platform.
+    fn executable(self, name: &str) -> String {
         match self {
-            Self::Windows => "traxide.exe",
-            Self::Linux | Self::Macos => "traxide",
+            Self::Windows => format!("{name}.exe"),
+            Self::Linux | Self::Macos => name.to_owned(),
         }
     }
 }
@@ -88,24 +89,30 @@ fn assemble(platform: Platform, traxide: &Path, staging: &Path) -> Result<()> {
     let resources = staging.join("resources");
     std::fs::create_dir_all(&plugins)?;
     std::fs::create_dir_all(&resources)?;
-    for icon in ["icon.png", "icon-dark.png"] {
-        std::fs::copy(source.join("plugins").join(icon), plugins.join(icon))?;
-    }
     std::fs::copy(
         source.join("resources/icon.png"),
         resources.join("icon.png"),
     )?;
-    let executable = plugins.join(platform.executable());
-    std::fs::copy(traxide, &executable)
-        .with_context(|| format!("copying {}", traxide.display()))?;
-    make_executable(&executable)?;
-
     let mut plugin = read_json(&source.join("plugins/plugin.json"))?;
     for action in plugin["actions"]
         .as_array_mut()
         .context("plugin.json has actions")?
     {
-        action["entrypoint"] = json!(platform.executable());
+        let name = action["entrypoint"]
+            .as_str()
+            .context("each action has an entry point")?;
+        let entry_point = platform.executable(name);
+        let executable = plugins.join(&entry_point);
+        std::fs::copy(traxide, &executable)
+            .with_context(|| format!("copying {}", traxide.display()))?;
+        make_executable(&executable)?;
+        action["entrypoint"] = json!(entry_point);
+        for icons in ["icons-light", "icons-dark"] {
+            for icon in action[icons].as_array().context("each action has icons")? {
+                let icon = icon.as_str().context("an icon's file name")?;
+                std::fs::copy(source.join("plugins").join(icon), plugins.join(icon))?;
+            }
+        }
     }
     write_json(&plugins.join("plugin.json"), &plugin)?;
 
@@ -163,24 +170,43 @@ mod tests {
     }
 
     #[test]
-    fn the_route_board_button_starts_the_platforms_traxide() {
-        for (platform, executable) in [
-            (Platform::Linux, "traxide"),
-            (Platform::Macos, "traxide"),
-            (Platform::Windows, "traxide.exe"),
+    fn each_button_starts_a_copy_of_the_platforms_traxide_named_for_it() {
+        for (platform, extension) in [
+            (Platform::Linux, ""),
+            (Platform::Macos, ""),
+            (Platform::Windows, ".exe"),
         ] {
             let folder = assembled(platform);
             let plugin = json_in(&folder, "plugins/plugin.json");
             assert_eq!(plugin["identifier"], IDENTIFIER);
             assert_eq!(plugin["runtime"]["type"], "exec");
-            let route = &plugin["actions"][0];
-            assert_eq!(route["name"], "Route board");
-            assert_eq!(route["entrypoint"], executable);
-            let installed = folder.path().join("package/plugins").join(executable);
+            let actions = plugin["actions"].as_array().expect("actions");
+            let buttons: Vec<(&str, &str)> = actions
+                .iter()
+                .map(|action| {
+                    (
+                        action["name"].as_str().expect("a name"),
+                        action["entrypoint"].as_str().expect("an entry point"),
+                    )
+                })
+                .collect();
             assert_eq!(
-                std::fs::read_to_string(installed).expect("traxide in the package"),
-                "a binary"
+                buttons,
+                [
+                    ("Route board", format!("traxide{extension}").as_str()),
+                    (
+                        "Route selected nets",
+                        format!("traxide-selected{extension}").as_str()
+                    ),
+                ]
             );
+            for (_, entry_point) in buttons {
+                let installed = folder.path().join("package/plugins").join(entry_point);
+                assert_eq!(
+                    std::fs::read_to_string(installed).expect("traxide in the package"),
+                    "a binary"
+                );
+            }
         }
     }
 
@@ -201,10 +227,12 @@ mod tests {
         let folder = assembled(Platform::Linux);
         let package = folder.path().join("package");
         let plugin = json_in(&folder, "plugins/plugin.json");
-        for icons in ["icons-light", "icons-dark"] {
-            for icon in plugin["actions"][0][icons].as_array().expect("icons") {
-                let icon = icon.as_str().expect("a file name");
-                assert!(package.join("plugins").join(icon).is_file(), "{icon}");
+        for action in plugin["actions"].as_array().expect("actions") {
+            for icons in ["icons-light", "icons-dark"] {
+                for icon in action[icons].as_array().expect("icons") {
+                    let icon = icon.as_str().expect("a file name");
+                    assert!(package.join("plugins").join(icon).is_file(), "{icon}");
+                }
             }
         }
         assert!(package.join("resources/icon.png").is_file());
@@ -215,11 +243,13 @@ mod tests {
     fn traxide_in_the_package_is_executable() {
         use std::os::unix::fs::PermissionsExt;
         let folder = assembled(Platform::Linux);
-        let mode = std::fs::metadata(folder.path().join("package/plugins/traxide"))
-            .expect("traxide in the package")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o111, 0o111);
+        for entry_point in ["traxide", "traxide-selected"] {
+            let mode = std::fs::metadata(folder.path().join("package/plugins").join(entry_point))
+                .expect("traxide in the package")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "{entry_point}");
+        }
     }
 
     #[test]

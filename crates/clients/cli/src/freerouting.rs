@@ -5,7 +5,7 @@
 use anyhow::{Context, Result, bail};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use traxide_routing::RouteJob;
+use traxide_routing::{Nets, RouteJob};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Invocation {
@@ -96,7 +96,7 @@ pub(crate) fn parse(args: &[String]) -> Result<Invocation> {
             profile_file: None,
             threads,
             unrouted_net_classes,
-            nets: Vec::new(),
+            nets: Nets::All,
             drc_report,
             time_limit: None,
             reroute_existing: false,
