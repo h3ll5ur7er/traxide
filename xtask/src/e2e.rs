@@ -5,8 +5,9 @@
 
 use crate::kicad::{self, Kicad};
 use crate::kicad_package::{self, Platform};
-use crate::running_kicad::RunningKicad;
+use crate::running_kicad::{Button, RunningKicad};
 use anyhow::{Context, Result, bail, ensure};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -125,7 +126,8 @@ fn round_trip(
 /// by pressing the plugin's button, has KiCad save
 /// it and judge it with its zones as traxide left them, refilled, then
 /// requires the undos to take the routes back: one, or two on a board with
-/// copper zones, whose refill is an undo step of its own.
+/// copper zones, whose refill is an undo step of its own. Then routes the nets
+/// of a footprint selected there with the other button.
 fn through_running_kicad(
     kicad: &Kicad,
     root: &Path,
@@ -148,7 +150,7 @@ fn through_running_kicad(
         "KiCad's API gives another design than the board file; they differ in {}",
         differences(&before, &from_file).join(", ")
     );
-    running.route_with_the_plugin(&before)?;
+    running.route_with_the_plugin(Button::RouteBoard, &before)?;
     running.save()?;
     let judgement = kicad.judge_saved_in_kicad(root, &running.project, recipe)?;
     ensure!(
@@ -180,22 +182,76 @@ fn through_running_kicad(
         "one undo"
     };
     running.undo()?;
+    wait_until_back_to(&running, &before, undos)?;
+    let zones = if judgement.zones > 0 {
+        ", zones refilled"
+    } else {
+        ""
+    };
+    let selected = route_the_nets_of_a_selected_footprint(&running, &before, judgement.zones > 0)?;
+    Ok(format!(
+        "routed in a running KiCad by its traxide button ({} track segments, {} vias{zones}), clean, and gone after {undos}; {selected}",
+        judgement.tracks, judgement.vias
+    ))
+}
+
+fn wait_until_back_to(running: &RunningKicad, before: &Design, undos: &str) -> Result<()> {
     let started = Instant::now();
-    while running.design()? != before {
+    while running.design()? != *before {
         ensure!(
             started.elapsed() < Duration::from_secs(10),
             "{undos} did not take the routes back out of KiCad"
         );
         std::thread::sleep(Duration::from_millis(200));
     }
-    let zones = if judgement.zones > 0 {
-        ", zones refilled"
+    Ok(())
+}
+
+/// Selects a footprint in KiCad, presses *Route selected nets* and requires
+/// copper of its nets only, then takes it back: with a second undo for the
+/// refill on a board with copper zones.
+fn route_the_nets_of_a_selected_footprint(
+    running: &RunningKicad,
+    before: &Design,
+    copper_zones: bool,
+) -> Result<String> {
+    let footprint = running.select_a_footprint()?;
+    let nets: BTreeSet<_> = (before.pads.iter())
+        .filter(|pad| pad.part() == footprint)
+        .filter_map(|pad| pad.net)
+        .collect();
+    running.route_with_the_plugin(Button::RouteSelectedNets, before)?;
+    let routed = running.design()?;
+    let added = (routed.existing.tracks.iter())
+        .filter(|track| !before.existing.tracks.contains(track))
+        .map(|track| track.net)
+        .chain(
+            (routed.existing.vias.iter())
+                .filter(|via| !before.existing.vias.contains(via))
+                .map(|via| via.net),
+        );
+    let others: BTreeSet<&str> = added
+        .filter(|net| !nets.contains(net))
+        .map(|net| before.net(net).name.as_str())
+        .collect();
+    ensure!(
+        others.is_empty(),
+        "routing the nets of {footprint}, selected, added copper of {}",
+        others.into_iter().collect::<Vec<_>>().join(", ")
+    );
+    let undos = if copper_zones {
+        running.undo()?;
+        // KiCad runs the undo on its GUI thread after answering.
+        std::thread::sleep(Duration::from_secs(2));
+        "two undos"
     } else {
-        ""
+        "one undo"
     };
+    running.undo()?;
+    wait_until_back_to(running, before, undos)?;
     Ok(format!(
-        "routed in a running KiCad by its traxide button ({} track segments, {} vias{zones}), clean, and gone after {undos}",
-        judgement.tracks, judgement.vias
+        "the {} nets of {footprint} routed by the button for selected nets, and gone after {undos}",
+        nets.len()
     ))
 }
 

@@ -24,6 +24,11 @@ pub enum BoardError {
     KicadUnreachable { socket: PathBuf, reason: String },
     #[error("KiCad: {0}")]
     Kicad(String),
+    #[error(
+        "nothing of a net is selected in KiCad: select the tracks, vias, pads, footprints \
+         or zones whose nets to route"
+    )]
+    NothingSelected,
 }
 
 const HOW_TO_REACH_KICAD: &str = "\

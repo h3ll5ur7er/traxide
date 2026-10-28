@@ -14,6 +14,16 @@
       "entrypoint": "traxide",
       "icons-light": ["icon.png"],
       "icons-dark": ["icon-dark.png"]
+    },
+    {
+      "identifier": "route-selected",
+      "name": "Route selected nets",
+      "description": "Route the nets of the selected tracks, vias, pads, footprints and zones with traxide",
+      "show-button": true,
+      "scopes": ["pcb"],
+      "entrypoint": "traxide-selected",
+      "icons-light": ["icon-selected.png"],
+      "icons-dark": ["icon-selected-dark.png"]
     }
   ]
 }

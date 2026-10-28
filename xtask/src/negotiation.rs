@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use traxide_contracts::geometry::Point;
 use traxide_contracts::{ConnectionId, Design, Event, Plan};
 use traxide_events::CancelToken;
-use traxide_routing::RouteJob;
+use traxide_routing::{Nets, RouteJob};
 
 /// Rip-ups are counted by squares of this size, in nanometres: 1 mm.
 const PLACE: i32 = 1_000_000;
@@ -71,7 +71,7 @@ pub fn run(args: &[String]) -> Result<()> {
         profile_file: None,
         threads: None,
         unrouted_net_classes: Vec::new(),
-        nets: Vec::new(),
+        nets: Nets::All,
         drc_report: None,
         time_limit: None,
         reroute_existing: false,

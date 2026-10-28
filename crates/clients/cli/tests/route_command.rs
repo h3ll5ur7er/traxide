@@ -230,6 +230,13 @@ fn a_route_names_its_board_or_the_one_open_in_kicad() {
     assert_eq!(both.status.code(), Some(2), "clap's usage error");
 }
 
+#[test]
+fn only_kicad_has_a_selection_to_route_the_nets_of() {
+    let board = board("two-nets.dsn");
+    let run = traxide(&["route", board.to_str().expect("utf-8"), "--selected"]);
+    assert_eq!(run.status.code(), Some(2), "clap's usage error");
+}
+
 /// KiCad starts a plugin's entry point with no arguments, its API's socket in
 /// the environment.
 #[test]

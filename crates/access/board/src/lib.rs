@@ -69,6 +69,12 @@ fn read_design(path: &Path) -> Result<Design, BoardError> {
     }
 }
 
+/// The names of the nets of what is selected in the board open in KiCad: the
+/// copper selected and the selected footprints' pads.
+pub fn nets_selected_in_kicad() -> Result<Vec<String>, BoardError> {
+    kicad::ipc::selected_nets(&kicad::ipc::Environment::of_process())
+}
+
 /// Where the routes of the board at `board` go unless told otherwise: a session
 /// beside a Specctra design, and a copy beside a KiCad board, which KiCad opens
 /// with the board's project; and the running KiCad for its board.
@@ -266,6 +272,12 @@ pub mod testing {
     /// Saves the board open in KiCad to its file, as *File → Save* does.
     pub fn save_board_in_kicad(socket: &Path) -> Result<(), BoardError> {
         ipc::testing::save_board(&environment(socket, None))
+    }
+
+    /// Selects a footprint with a pad of a net in the board open in KiCad, as
+    /// clicking it does, and names it by its reference.
+    pub fn select_a_footprint_in_kicad(socket: &Path) -> Result<String, BoardError> {
+        ipc::testing::select_a_footprint(&environment(socket, None))
     }
 
     /// Undoes the last change to the board open in KiCad, as *Edit → Undo* does.

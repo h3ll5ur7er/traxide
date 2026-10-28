@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use traxide_contracts::{Event, Stage};
 use traxide_events::{CancelToken, Silent};
-use traxide_routing::{RouteJob, RouteReport, Unroutable, route};
+use traxide_routing::{Nets, RouteJob, RouteReport, Unroutable, route};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -19,7 +19,7 @@ fn job(input: &str, output: &std::path::Path) -> RouteJob {
         profile_file: None,
         threads: None,
         unrouted_net_classes: Vec::new(),
-        nets: Vec::new(),
+        nets: Nets::All,
         drc_report: None,
         time_limit: None,
         reroute_existing: false,
@@ -103,7 +103,7 @@ fn only_the_nets_asked_for_get_copper() {
     let folder = tempfile::tempdir().expect("temp dir");
     let output = folder.path().join("board.ses");
     let job = RouteJob {
-        nets: vec!["Down".into()],
+        nets: Nets::Named(vec!["Down".into()]),
         ..job("two-nets.dsn", &output)
     };
     let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
@@ -120,7 +120,7 @@ fn a_net_with_a_plane_left_unrouted_gets_no_copper_after_routing_either() {
     let folder = tempfile::tempdir().expect("temp dir");
     let output = folder.path().join("board.ses");
     let job = RouteJob {
-        nets: vec!["Across".into()],
+        nets: Nets::Named(vec!["Across".into()]),
         ..job("gnd-plane.dsn", &output)
     };
     let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
@@ -133,11 +133,22 @@ fn a_net_with_a_plane_left_unrouted_gets_no_copper_after_routing_either() {
 fn an_unknown_net_to_route_is_an_error() {
     let folder = tempfile::tempdir().expect("temp dir");
     let job = RouteJob {
-        nets: vec!["Dwon".into()],
+        nets: Nets::Named(vec!["Dwon".into()]),
         ..job("two-nets.dsn", &folder.path().join("board.ses"))
     };
     let error = route(&job, &Silent, &CancelToken::new()).unwrap_err();
     assert_eq!(error.to_string(), "the board has no net named Dwon");
+}
+
+#[test]
+fn the_nets_selected_in_kicad_route_only_on_the_board_open_in_kicad() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    let job = RouteJob {
+        nets: Nets::SelectedInKicad,
+        ..job("two-nets.dsn", &folder.path().join("board.ses"))
+    };
+    let error = route(&job, &Silent, &CancelToken::new()).unwrap_err();
+    assert!(error.to_string().contains("open in KiCad"), "{error}");
 }
 
 #[test]

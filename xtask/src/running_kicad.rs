@@ -1,7 +1,7 @@
 //! KiCad's PCB editor running with its IPC API, for the end-to-end test of
 //! routing the board open in KiCad: KiCad 9 and 10 serve the API only from the
 //! GUI, so the editor runs from the Docker image on a virtual display, with
-//! traxide's plugin installed, whose toolbar button the test presses.
+//! traxide's plugin installed, whose toolbar buttons the test presses.
 //!
 //! Linux only: the API's Unix socket is shared through a bind mount, which
 //! Docker Desktop does not pass through on macOS or Windows. Pressing the
@@ -19,9 +19,33 @@ use traxide_contracts::Design;
 const STARTUP: Duration = Duration::from_secs(90);
 /// How long the plugin may take to route a test board.
 const ROUTING: Duration = Duration::from_secs(120);
-/// The colour the plugin's light toolbar icon is filled with, by which the
-/// test finds its button on the screen (`kicad-plugin/plugins/icon.png`).
-const ICON_FILL: [u8; 3] = [27, 127, 90];
+
+/// The buttons the plugin adds to the editor's toolbar.
+#[derive(Debug, Clone, Copy)]
+pub enum Button {
+    RouteBoard,
+    RouteSelectedNets,
+}
+
+impl Button {
+    /// The colour the button's light icon is filled with, by which the test
+    /// finds it on the screen (`kicad-plugin/plugins/icon*.png`).
+    fn icon_fill(self) -> [u8; 3] {
+        match self {
+            Self::RouteBoard => [27, 127, 90],
+            Self::RouteSelectedNets => [27, 90, 127],
+        }
+    }
+
+    /// The name of the process the button starts, as `pgrep -x` matches it:
+    /// Linux keeps only the first 15 characters of a process's name.
+    fn process(self) -> &'static str {
+        match self {
+            Self::RouteBoard => "traxide",
+            Self::RouteSelectedNets => "traxide-selecte",
+        }
+    }
+}
 
 /// A PCB editor with a board open; stopped when dropped.
 pub struct RunningKicad {
@@ -136,11 +160,17 @@ impl RunningKicad {
         Ok(testing::undo_in_kicad(&self.socket)?)
     }
 
-    /// Presses the plugin's *Route board* button, as a designer would, and
-    /// waits until the plugin has changed the board `before` and finished.
-    pub fn route_with_the_plugin(&self, before: &Design) -> Result<()> {
+    /// Selects a footprint with a pad of a net, as clicking it does, and names
+    /// it by its reference.
+    pub fn select_a_footprint(&self) -> Result<String> {
+        Ok(testing::select_a_footprint_in_kicad(&self.socket)?)
+    }
+
+    /// Presses the plugin's `button`, as a designer would, and waits until the
+    /// plugin has changed the board `before` and finished.
+    pub fn route_with_the_plugin(&self, button: Button, before: &Design) -> Result<()> {
         let display = self.display()?;
-        let (x, y) = self.find_the_button(&display)?;
+        let (x, y) = self.find_the_button(&display, button)?;
         run(Command::new("xdotool")
             .env("DISPLAY", &display)
             .env_remove("XAUTHORITY")
@@ -148,7 +178,7 @@ impl RunningKicad {
         let started = Instant::now();
         loop {
             let plugin_running = Command::new("docker")
-                .args(["exec", &self.container, "pgrep", "-x", "traxide"])
+                .args(["exec", &self.container, "pgrep", "-x", button.process()])
                 .output()?
                 .status
                 .success();
@@ -176,7 +206,7 @@ impl RunningKicad {
     /// The middle of the plugin's button, found on a screenshot by the colour
     /// of its icon; KiCad adds plugin buttons to the toolbar a little after
     /// loading the board.
-    fn find_the_button(&self, display: &str) -> Result<(usize, usize)> {
+    fn find_the_button(&self, display: &str, button: Button) -> Result<(usize, usize)> {
         let started = Instant::now();
         loop {
             let screenshot = Command::new("import")
@@ -187,7 +217,7 @@ impl RunningKicad {
                 .output()
                 .context("taking a screenshot: is ImageMagick installed?")?;
             ensure!(screenshot.status.success(), "taking a screenshot failed");
-            if let Some(middle) = middle_of_colour(&screenshot.stdout, ICON_FILL)? {
+            if let Some(middle) = middle_of_colour(&screenshot.stdout, button.icon_fill())? {
                 return Ok(middle);
             }
             ensure!(
@@ -342,13 +372,13 @@ mod tests {
     fn finds_the_middle_of_the_icon_on_a_screenshot() {
         let screenshot = ppm(100, 50, |x, y| {
             if (60..80).contains(&x) && (10..30).contains(&y) {
-                ICON_FILL
+                Button::RouteBoard.icon_fill()
             } else {
                 [240, 240, 240]
             }
         });
         assert_eq!(
-            middle_of_colour(&screenshot, ICON_FILL).expect("a PPM"),
+            middle_of_colour(&screenshot, Button::RouteBoard.icon_fill()).expect("a PPM"),
             Some((69, 19))
         );
     }
@@ -357,7 +387,7 @@ mod tests {
     fn finds_no_icon_on_a_screenshot_without_it() {
         let screenshot = ppm(100, 50, |_, _| [240, 240, 240]);
         assert_eq!(
-            middle_of_colour(&screenshot, ICON_FILL).expect("a PPM"),
+            middle_of_colour(&screenshot, Button::RouteBoard.icon_fill()).expect("a PPM"),
             None
         );
     }

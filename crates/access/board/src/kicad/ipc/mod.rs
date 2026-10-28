@@ -9,6 +9,7 @@ mod client;
 mod items;
 mod messages;
 mod nng;
+mod selection;
 
 pub(crate) use client::Environment;
 
@@ -22,7 +23,8 @@ use messages::board::commands::{
 use messages::board::types::Net;
 use messages::common::commands::{
     BeginCommit, BeginCommitResponse, CommitAction, CreateItems, CreateItemsResponse, EndCommit,
-    EndCommitResponse, ItemStatusCode, SaveDocumentToString, SavedDocumentResponse,
+    EndCommitResponse, GetSelection, ItemStatusCode, SaveDocumentToString, SavedDocumentResponse,
+    SelectionResponse,
 };
 use messages::common::project::{NetClass, NetClassType};
 use messages::common::types::document_specifier::Identifier;
@@ -38,6 +40,26 @@ pub(crate) fn load_design(environment: &Environment) -> Result<Design, BoardErro
     let mut kicad = Kicad::connect(environment)?;
     let document = kicad.open_board()?;
     Ok(read(&mut kicad, &document, environment)?.design)
+}
+
+/// The names of the nets of the items selected in KiCad's PCB editor: the
+/// nets of the copper selected and of the selected footprints' pads. A
+/// selection of no net is an error, as routing it would do nothing.
+pub(crate) fn selected_nets(environment: &Environment) -> Result<Vec<String>, BoardError> {
+    let mut kicad = Kicad::connect(environment)?;
+    let document = kicad.open_board()?;
+    let selected: SelectionResponse = kicad.call(&GetSelection {
+        header: Some(ItemHeader {
+            document: Some(document),
+            ..ItemHeader::default()
+        }),
+        types: Vec::new(),
+    })?;
+    let nets = selection::nets_of(&selected.items);
+    if nets.is_empty() {
+        return Err(BoardError::NothingSelected);
+    }
+    Ok(nets)
 }
 
 /// Adds `routes`, routed on `design`, to the board open in KiCad as one commit,
@@ -230,10 +252,14 @@ fn nanometres(value: i64) -> i32 {
 /// What the end-to-end test does to the running KiCad as a designer would.
 #[cfg(feature = "testing")]
 pub(crate) mod testing {
+    use super::messages::board::types::{FootprintInstance, Pad};
     use super::messages::common::commands::{
-        RunAction, RunActionResponse, RunActionStatus, SaveDocument,
+        AddToSelection, GetItems, GetItemsResponse, RunAction, RunActionResponse, RunActionStatus,
+        SaveDocument,
     };
+    use super::messages::common::types::KiCadObjectType;
     use super::*;
+    use messages::Packed;
 
     /// Saves the board open in KiCad to its file, as *File → Save* does.
     pub fn save_board(environment: &Environment) -> Result<(), BoardError> {
@@ -244,6 +270,40 @@ pub(crate) mod testing {
                 document: Some(document),
             })
             .map(drop)
+    }
+
+    /// Selects the first footprint with a pad of a net, as clicking it does,
+    /// and names it by its reference.
+    pub fn select_a_footprint(environment: &Environment) -> Result<String, BoardError> {
+        let mut kicad = Kicad::connect(environment)?;
+        let header = ItemHeader {
+            document: Some(kicad.open_board()?),
+            ..ItemHeader::default()
+        };
+        let footprints: GetItemsResponse = kicad.call(&GetItems {
+            header: Some(header.clone()),
+            types: vec![KiCadObjectType::KotPcbFootprint.into()],
+        })?;
+        let has_a_pad_of_a_net = |footprint: &FootprintInstance| {
+            (footprint.definition.iter())
+                .flat_map(|definition| &definition.items)
+                .filter_map(|item| item.to::<Pad>())
+                .any(|pad| pad.net.is_some_and(|net| !net.name.is_empty()))
+        };
+        let footprint = (footprints.items.iter())
+            .filter_map(|item| item.to::<FootprintInstance>())
+            .find(has_a_pad_of_a_net)
+            .ok_or_else(|| BoardError::Kicad("the board has no footprint of a net".into()))?;
+        let reference = (footprint.reference_field.as_ref())
+            .and_then(|field| field.text.as_ref())
+            .and_then(|text| text.text.as_ref())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        kicad.call::<_, SelectionResponse>(&AddToSelection {
+            header: Some(header),
+            items: footprint.id.into_iter().collect(),
+        })?;
+        Ok(reference)
     }
 
     /// Undoes the last change to the board, as *Edit → Undo* does.
@@ -273,7 +333,7 @@ pub(crate) mod testing {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::messages::board::types::{DrillProperties, PadStack, PadStackLayer};
+    use super::messages::board::types::{self as kicad, DrillProperties, PadStack, PadStackLayer};
     use super::messages::common::commands::{
         GetOpenDocumentsResponse, ItemCreationResult, ItemStatus,
     };
@@ -310,6 +370,8 @@ mod tests {
         /// The class KiCad states for each net, `Default` where none is named.
         classes: Vec<(String, NetClass)>,
         refuse_items: bool,
+        /// The items selected in the editor.
+        selection: Vec<Any>,
         /// The requests received, by message name; commits with their action.
         received: Vec<String>,
     }
@@ -456,6 +518,9 @@ mod tests {
                 ok(&EndCommitResponse {})
             }
             "RefillZones" => ok(&()),
+            "GetSelection" => ok(&SelectionResponse {
+                items: state.selection.clone(),
+            }),
             other => panic!("the fake KiCad does not know {other}"),
         }
     }
@@ -647,5 +712,74 @@ mod tests {
         environment.project_folder = Some(elsewhere.path().into());
         let design = load_design(&environment).expect("read");
         assert_eq!(design.rules.edge_clearance, 1_500_000);
+    }
+
+    fn net(name: &str) -> Option<Net> {
+        Some(Net {
+            name: name.into(),
+            code: None,
+        })
+    }
+
+    fn a_footprint_with_pads_on(nets: &[&str]) -> Any {
+        Any::of(&kicad::FootprintInstance {
+            definition: Some(kicad::Footprint {
+                items: nets
+                    .iter()
+                    .map(|name| {
+                        Any::of(&kicad::Pad {
+                            net: net(name),
+                            ..kicad::Pad::default()
+                        })
+                    })
+                    .collect(),
+                ..kicad::Footprint::default()
+            }),
+            ..kicad::FootprintInstance::default()
+        })
+    }
+
+    #[test]
+    fn the_selected_nets_are_those_of_the_copper_selected_and_of_the_selected_footprints_pads() {
+        let (_folder, environment, _) = fake_kicad(|state| {
+            state.selection = vec![
+                Any::of(&kicad::Track {
+                    net: net("ROW0"),
+                    ..kicad::Track::default()
+                }),
+                a_footprint_with_pads_on(&["COL1", "ROW0", ""]),
+                Any::of(&kicad::Via {
+                    net: net("COL2"),
+                    ..kicad::Via::default()
+                }),
+                Any::of(&kicad::Zone {
+                    settings: Some(kicad::zone::Settings::CopperSettings(
+                        kicad::CopperZoneSettings {
+                            net: net("GND"),
+                            ..kicad::CopperZoneSettings::default()
+                        },
+                    )),
+                    ..kicad::Zone::default()
+                }),
+                Any::of(&kicad::BoardText::default()),
+            ];
+        });
+        assert_eq!(
+            selected_nets(&environment).expect("read"),
+            ["COL1", "COL2", "GND", "ROW0"]
+        );
+    }
+
+    #[test]
+    fn a_selection_of_no_net_is_an_error_that_says_what_to_select() {
+        let (_folder, environment, _) = fake_kicad(|state| {
+            state.selection = vec![
+                Any::of(&kicad::BoardText::default()),
+                a_footprint_with_pads_on(&[""]),
+            ];
+        });
+        let error = selected_nets(&environment).expect_err("nothing to route");
+        assert!(matches!(error, BoardError::NothingSelected), "{error}");
+        assert!(error.to_string().contains("select the tracks"), "{error}");
     }
 }
