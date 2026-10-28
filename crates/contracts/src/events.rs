@@ -25,6 +25,7 @@ pub enum Stage {
     Planning,
     GlobalRouting,
     Routing,
+    Optimising,
     Verifying,
     Storing,
 }

@@ -32,6 +32,7 @@ traxide-rules = { path = "crates/engines/rules" }
 traxide-planning = { path = "crates/engines/planning" }
 traxide-detailed = { path = "crates/engines/detailed" }
 traxide-verification = { path = "crates/engines/verification" }
+traxide-optimization = { path = "crates/engines/optimization" }
 traxide-inspection = { path = "crates/managers/inspection" }
 traxide-routing = { path = "crates/managers/routing" }
 anyhow = "1"

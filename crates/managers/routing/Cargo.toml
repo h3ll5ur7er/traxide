@@ -19,6 +19,7 @@ traxide-planning.workspace = true
 traxide-profile-access.workspace = true
 traxide-rules.workspace = true
 traxide-verification.workspace = true
+traxide-optimization.workspace = true
 
 
 [dev-dependencies]

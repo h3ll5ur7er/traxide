@@ -330,7 +330,11 @@ pub fn route(
             unrouted.extend(joined.unrouted);
         }
     }
-    let routes = routes.without_repeated_vias(&design.existing);
+    let mut routes = routes.without_repeated_vias(&design.existing);
+    if !cancel.is_cancelled() {
+        events.publish(Event::StageStarted(Stage::Optimising));
+        routes = traxide_optimization::pull_tight(&routes, &mut Layout::build(&design, &rules));
+    }
     let at_pins = |connections: Vec<Connection>| -> Vec<Connection> {
         connections
             .into_iter()
