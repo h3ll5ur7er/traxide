@@ -942,6 +942,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "traxide-optimization"
+version = "0.1.0"
+dependencies = [
+ "traxide-contracts",
+ "traxide-layout-access",
+ "traxide-rules",
+ "traxide-verification",
+]
+
+[[package]]
 name = "traxide-planning"
 version = "0.1.0"
 dependencies = [
@@ -975,6 +985,7 @@ dependencies = [
  "traxide-events",
  "traxide-global",
  "traxide-layout-access",
+ "traxide-optimization",
  "traxide-planning",
  "traxide-profile-access",
  "traxide-rules",

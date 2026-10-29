@@ -1,0 +1,20 @@
+[package]
+name = "traxide-optimization"
+description = "Optimization Engine: makes routed copper shorter and simpler without changing what it connects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+traxide-contracts.workspace = true
+
+[dev-dependencies]
+traxide-contracts = { workspace = true, features = ["testing"] }
+traxide-layout-access.workspace = true
+traxide-rules.workspace = true
+traxide-verification.workspace = true
+
+[lints]
+workspace = true

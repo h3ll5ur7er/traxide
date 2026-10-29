@@ -67,6 +67,8 @@ Differential pairs are routed as one coupled entity with pose-based A* (position
 
 Region by region, on copy-on-write snapshots: pull-tight within each trace's channel, 45° mitering, removing via pairs that one layer can carry, reassigning segments to layers to save vias, removing stubs; later length tuning in reserved meander regions and teardrops. A move is kept only when it improves the cost and adds no violation.
 
+Built so far ([[TRX-36]]): pull-tight, one track at a time, on one thread. Each run of a track's corners is replaced by the shortest octilinear way between its ends where that fits in the layout, which holds everything else as it is by then; the track's ends and the vias stay, so nothing joined comes apart, and no corner turns by more than 90°. It removes a quarter to a third of the corners on the corpus's larger boards, and under 1 % of the track length.
+
 ### Verify
 
 An independent DRC over the result: clearances, widths, vias, unconnected pins, overlaps with keepouts and the board outline, plus metrics — completion, total length, vias, run time per stage. The router's own clearance checks are never trusted for sign-off. In the benchmark, KiCad's own DRC (`kicad-cli pcb drc`) is a second, external referee.
