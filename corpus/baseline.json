@@ -35,9 +35,9 @@
     },
     "fixtures_Issue029-hw48na": {
       "outcome": "finished",
-      "seconds": 91.7,
+      "seconds": 91.9,
       "nets": 163,
-      "routed": 150,
+      "routed": 155,
       "rules_broken": 0
     },
     "fixtures_Issue034-Green14SegLED": {
@@ -56,9 +56,9 @@
     },
     "fixtures_Issue039-bug-design": {
       "outcome": "finished",
-      "seconds": 91.6,
+      "seconds": 90.7,
       "nets": 74,
-      "routed": 43,
+      "routed": 44,
       "rules_broken": 0
     },
     "fixtures_Issue054-tairakb": {
@@ -70,9 +70,9 @@
     },
     "fixtures_Issue066-Project_GP8B": {
       "outcome": "finished",
-      "seconds": 96.7,
+      "seconds": 97.3,
       "nets": 266,
-      "routed": 226,
+      "routed": 227,
       "rules_broken": 0
     },
     "fixtures_Issue069-TestSensel_TestSensel": {
@@ -105,9 +105,9 @@
     },
     "fixtures_Issue102-Mars-64-revE-rot00": {
       "outcome": "finished",
-      "seconds": 90.3,
+      "seconds": 90.5,
       "nets": 94,
-      "routed": 80,
+      "routed": 82,
       "rules_broken": 0
     },
     "fixtures_Issue103-Board-Routed": {
@@ -119,9 +119,9 @@
     },
     "fixtures_Issue103-Board-Unrouted": {
       "outcome": "finished",
-      "seconds": 98.1,
+      "seconds": 95.3,
       "nets": 282,
-      "routed": 159,
+      "routed": 165,
       "rules_broken": 0
     },
     "fixtures_Issue107-freq_teiler_200kHz_kicad": {
@@ -175,9 +175,9 @@
     },
     "fixtures_Issue113-Protein": {
       "outcome": "finished",
-      "seconds": 92.4,
+      "seconds": 91.8,
       "nets": 203,
-      "routed": 149,
+      "routed": 153,
       "rules_broken": 0
     },
     "fixtures_Issue143-rpi_splitter": {
@@ -193,9 +193,9 @@
     },
     "fixtures_Issue145-smoothieboard": {
       "outcome": "finished",
-      "seconds": 90.3,
+      "seconds": 91.9,
       "nets": 245,
-      "routed": 228,
+      "routed": 231,
       "rules_broken": 0
     },
     "fixtures_Issue153-wavefolder": {
@@ -312,9 +312,9 @@
     },
     "fixtures_Issue219-LogicBoard_smt": {
       "outcome": "finished",
-      "seconds": 97.6,
+      "seconds": 94.4,
       "nets": 343,
-      "routed": 327,
+      "routed": 331,
       "rules_broken": 0
     },
     "fixtures_Issue229-display-8-digit-hc595": {
@@ -389,9 +389,9 @@
     },
     "fixtures_Issue289-Autorouter_PCB_FHT-8086_2024-03-08": {
       "outcome": "finished",
-      "seconds": 94.2,
+      "seconds": 92.2,
       "nets": 142,
-      "routed": 69,
+      "routed": 70,
       "rules_broken": 0
     },
     "fixtures_Issue289-Autorouter_PCB_FHT-VGA_2024-03-25": {
@@ -417,9 +417,9 @@
     },
     "fixtures_Issue326-Mars-64-revE": {
       "outcome": "finished",
-      "seconds": 90.8,
+      "seconds": 90.4,
       "nets": 94,
-      "routed": 74,
+      "routed": 81,
       "rules_broken": 0
     },
     "fixtures_Issue367-Charger": {
