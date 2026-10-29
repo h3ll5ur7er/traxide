@@ -1,6 +1,6 @@
 use traxide_contracts::geometry::{Point, Rect};
 
-/// A uniform grid over the board; each cell lists the items whose bounds touch it.
+/// A uniform grid over the board; each cell lists the items that touch it.
 #[derive(Debug, Clone)]
 pub(crate) struct Buckets {
     origin: Point,
@@ -26,6 +26,52 @@ impl Buckets {
     pub(crate) fn insert(&mut self, bounds: Rect, item: usize) {
         for cell in self.cells_in(bounds) {
             self.cells[cell].push(item);
+        }
+    }
+
+    /// Lists `item`, within `bounds`, only in the cells `touches` says it
+    /// reaches: a long diagonal track's bounds cover many cells it never comes
+    /// near, where every query would otherwise find it and check it in full.
+    /// The outermost cells stand for everything beyond the area too.
+    pub(crate) fn insert_touching(
+        &mut self,
+        bounds: Rect,
+        item: usize,
+        touches: impl Fn(Rect) -> bool,
+    ) {
+        for cell in self.cells_in(bounds) {
+            if touches(self.reach_of(cell)) {
+                self.cells[cell].push(item);
+            }
+        }
+    }
+
+    /// What `cell` stands for: its square, stretched to the far side of the
+    /// plane at the edges of the area.
+    fn reach_of(&self, cell: usize) -> Rect {
+        const BEYOND: i32 = i32::MAX / 4;
+        let (column, row) = (cell % self.columns, cell / self.columns);
+        let start = |index: usize, from: i32| {
+            from + i32::try_from(index).unwrap_or(i32::MAX / 2) * self.size
+        };
+        let (x, y) = (start(column, self.origin.x), start(row, self.origin.y));
+        Rect {
+            min: Point::new(
+                if column == 0 { -BEYOND } else { x },
+                if row == 0 { -BEYOND } else { y },
+            ),
+            max: Point::new(
+                if column + 1 == self.columns {
+                    BEYOND
+                } else {
+                    x + self.size
+                },
+                if row + 1 == self.rows {
+                    BEYOND
+                } else {
+                    y + self.size
+                },
+            ),
         }
     }
 
@@ -123,5 +169,27 @@ mod tests {
         assert!(!buckets.candidates(rect(0, 0, 100, 100)).any(|i| i == 7));
         assert!(buckets.candidates(rect(5, 5, 6, 6)).any(|i| i == 8));
         assert!(buckets.is_empty(buckets.cell_at(Point::new(21, 5))));
+    }
+
+    #[test]
+    fn an_item_is_listed_only_in_the_cells_it_touches() {
+        let mut buckets = Buckets::new(rect(0, 0, 100, 100), 10);
+        let on_the_diagonal =
+            |cell: Rect| cell.min.x - cell.min.y < 10 && cell.min.y - cell.min.x < 10;
+        buckets.insert_touching(rect(0, 0, 99, 99), 4, on_the_diagonal);
+        assert!(buckets.candidates(rect(55, 55, 56, 56)).any(|i| i == 4));
+        assert!(!buckets.candidates(rect(5, 85, 6, 86)).any(|i| i == 4));
+    }
+
+    #[test]
+    fn the_outermost_cells_stand_for_everything_beyond_the_area() {
+        let mut buckets = Buckets::new(rect(0, 0, 100, 100), 10);
+        let far_out = |cell: Rect| cell.min.x <= -500 && cell.min.y <= -500;
+        buckets.insert_touching(rect(-600, -600, -500, -500), 3, far_out);
+        assert!(
+            buckets
+                .candidates(rect(-550, -550, -549, -549))
+                .any(|i| i == 3)
+        );
     }
 }

@@ -17,7 +17,23 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
-## Ripped-up copper out of the index (M2, TRX-48)
+## Copper listed only where it reaches (M2, TRX-48)
+
+The layout's spatial index, 1 mm cells per layer, listed each obstacle in every cell of its bounding box. A diagonal track's box is a square, and a keepout's box can be far larger than the keepout: in those cells every query found the obstacle, passed the bounding-box test and checked it exactly. Each obstacle is now listed only in the cells it reaches (the cell's square against the shape, with the keepout's clearance; the outermost cells stand for everything beyond the board, as before). Same sessions to the byte; this machine, 4 cores:
+
+| Board | Before | **After** |
+| --- | --- | --- |
+| Sofle (Issue178), 803 keepouts | 30.5 s | **7.5 s** |
+| Issue015-StackOverflow | 17.0 s | **14.3 s** |
+| Issue027-zMRETestFixture | 21.3 s | **17.9 s** |
+| Issue022-AutoRouter_interrupted | 31.9 s | **27.7 s** |
+| Issue110-RelayModule | 6.7 s | **5.7 s** |
+| Issue230, Issue217, Issue034, caniot | 9.0, 7.1, 34.1, 44.0 s | 7.4, 6.2, 32.4, 42.3 s |
+| keyboard-tkl, median of five | 1.48 s | **1.25 s** |
+
+**Measured and not built: searching ahead in parallel.** Routing uses one core of four on these boards (user time equals wall time): batches put connections side by side only where their whole windows are apart, and the long ones overlap everything. Searches touch far less than their window, so the next k connections could be searched side by side against the same layout and committed in queue order while nothing committed before them changed what they explored, which keeps the routes those of one connection at a time. Simulated from a log of every search (its time and the box it expanded) and every commit (the boxes of its route and of what it ripped up), with 1 mm of reach around both: with k = 16 and 8 workers Issue034 would take 37 s instead of 50 s of searching, Issue015 and RelayModule no less at all. Under two connections commit per batch on average: what each commit changes lies in what the next searches explored, around the same busy pins. Issue034's time is churn (1,297 searches for 147 connections, 38 ms each), Issue015's a few long searches across the board (15 searches over 0.5 s take 12.8 of its 16.2 s).
+
+
 
 Profiled on Mars-64 (one thread, gdb stack samples of a release build with line tables), half the time went into copper queries and a fifth into `is_near_a_via_of_its_path`. Removing a route flagged its copper as removed but left it in the layout's spatial buckets, where every later query walked past it; after thousands of rip-ups the cells around the busy pins held mostly dead entries. Removing a route now takes its copper and holes out of the buckets. Besides: each search state keeps how far its path has run since its last via, so the walk back for a via of the path happens only where one can be within reach, and a node is found open around by asking whether anything is there rather than for every obstruction.
 
