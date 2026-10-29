@@ -33,10 +33,9 @@ enum Owner {
 #[derive(Debug, Clone)]
 struct Obstacle {
     owner: Owner,
+    layer: LayerId,
     shape: Shape,
     bounds: Rect,
-    /// Removed obstacles stay in the buckets, ignored, rather than being searched for.
-    removed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +77,16 @@ struct Hole {
     position: Point,
     radius: i32,
     connection: Option<ConnectionId>,
-    removed: bool,
+}
+
+impl Hole {
+    fn bounds(&self) -> Rect {
+        Rect {
+            min: self.position,
+            max: self.position,
+        }
+        .inflated(self.radius)
+    }
 }
 
 impl<'a> Layout<'a> {
@@ -140,9 +148,9 @@ impl<'a> Layout<'a> {
         let id = self.obstacles.len();
         self.obstacles.push(Obstacle {
             owner,
+            layer,
             shape,
             bounds,
-            removed: false,
         });
         self.layers[layer.index()].insert(bounds, id);
         id
@@ -163,7 +171,7 @@ impl<'a> Layout<'a> {
         let mut routed = Vec::new();
         for id in self.layers[layer.index()].candidates(reach) {
             let obstacle = &self.obstacles[id];
-            if obstacle.removed || !obstacle.bounds.intersects(reach) {
+            if !obstacle.bounds.intersects(reach) {
                 continue;
             }
             let (connection, clearance) = match obstacle.owner {
@@ -203,20 +211,15 @@ impl<'a> Layout<'a> {
     fn insert_hole(&mut self, via: &Via, connection: Option<ConnectionId>) -> Option<usize> {
         let radius = self.design.via_kind(via.kind).drill? / 2;
         let id = self.holes.len();
-        let bounds = Rect {
-            min: via.position,
-            max: via.position,
-        }
-        .inflated(radius);
-        self.holes.push(Hole {
+        let hole = Hole {
             net: via.net,
             kind: via.kind,
             position: via.position,
             radius,
             connection,
-            removed: false,
-        });
-        self.hole_buckets.insert(bounds, id);
+        };
+        self.hole_buckets.insert(hole.bounds(), id);
+        self.holes.push(hole);
         self.widest_hole = self.widest_hole.max(radius);
         Some(id)
     }
@@ -239,9 +242,7 @@ impl<'a> Layout<'a> {
         let mut routed = Vec::new();
         for id in self.hole_buckets.candidates(reach) {
             let hole = &self.holes[id];
-            if hole.removed
-                || (hole.net == via.net && hole.kind == via.kind && hole.position == via.position)
-            {
+            if hole.net == via.net && hole.kind == via.kind && hole.position == via.position {
                 continue;
             }
             let gap =
@@ -380,12 +381,13 @@ impl LayoutAccess for Layout<'_> {
     fn remove_route(&mut self, connection: ConnectionId) {
         if let Some(ids) = self.routed.get_mut(connection.index()) {
             for id in ids.drain(..) {
-                self.obstacles[id].removed = true;
+                let obstacle = &self.obstacles[id];
+                self.layers[obstacle.layer.index()].remove(obstacle.bounds, id);
             }
         }
         if let Some(ids) = self.routed_holes.get_mut(connection.index()) {
             for id in ids.drain(..) {
-                self.holes[id].removed = true;
+                self.hole_buckets.remove(self.holes[id].bounds(), id);
             }
         }
     }

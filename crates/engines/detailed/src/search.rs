@@ -30,6 +30,10 @@ pub(crate) struct Scratch {
     best: Stamped<i64>,
     /// The slot a state was reached from and the via taken, packed (see `Came`).
     came: Stamped<u64>,
+    /// How far a state's path has run since the last via it placed, by slot:
+    /// a via further back is too far to matter, and the path need not be
+    /// walked back to find it.
+    since_via: Stamped<i64>,
     /// What crossing obstructions costs on top of an edge's length, or `BLOCKED`.
     edge_extra: Stamped<i64>,
     /// The same for a via at a node.
@@ -316,6 +320,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         let nodes = self.grid.node_count();
         scratch.best.reset(nodes * layers);
         scratch.came.reset(nodes * layers);
+        scratch.since_via.reset(nodes * layers);
         scratch
             .edge_extra
             .reset(nodes * layers * DIRECTIONS.len() / 2);
@@ -341,6 +346,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             if cost < scratch.best.get(slot as usize).unwrap_or(i64::MAX) {
                 scratch.best.set(slot as usize, cost);
                 scratch.start_stub.set(slot as usize, stub);
+                scratch.since_via.set(slot as usize, i64::MAX);
                 scratch.came.set(
                     slot as usize,
                     Came {
@@ -366,6 +372,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 heading: self.arrival_heading(slot, scratch),
                 ..self.state(slot)
             };
+            let since_via = scratch.since_via.get(slot as usize).unwrap_or(i64::MAX);
             let mut relax = |next: Option<State>,
                              step_cost: i64,
                              via: Option<ViaKindId>,
@@ -381,6 +388,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         if total < scratch.best.get(next_slot as usize).unwrap_or(i64::MAX) {
                             scratch.best.set(next_slot as usize, total);
                             scratch.came.set(next_slot as usize, came.pack());
+                            let since_via = match (via, next.node == state.node) {
+                                (Some(_), _) => 0,
+                                (None, true) => since_via,
+                                (None, false) => since_via
+                                    .saturating_add(self.step_length(state.node, next.node)),
+                            };
+                            scratch.since_via.set(next_slot as usize, since_via);
                             open.push(Reverse((
                                 total + self.ranked_estimate(next),
                                 total,
@@ -490,6 +504,15 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         None
     }
 
+    /// The length of the step between two neighbouring nodes of the grid.
+    fn step_length(&self, from: Node, to: Node) -> i64 {
+        if from.0 == to.0 || from.1 == to.1 {
+            i64::from(self.profile.grid_pitch)
+        } else {
+            self.diagonal
+        }
+    }
+
     /// Whether a via of `kind` at `slot`'s node would sit closer than the
     /// hole-to-hole distance to a via the path to it placed, which the layout
     /// does not hold yet. The path is walked back only as far as such a via
@@ -502,8 +525,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         if apart <= 0 {
             return false;
         }
-        let here = self.grid.point(self.state(slot).node);
         let reach = apart + 2 * drill;
+        // The walk below looks at the node one step beyond `reach` too.
+        let since_via = scratch.since_via.get(slot as usize).unwrap_or(i64::MAX);
+        if since_via > reach + self.diagonal {
+            return false;
+        }
+        let here = self.grid.point(self.state(slot).node);
         let (mut current, mut previous, mut walked) = (slot, here, 0);
         while walked <= reach {
             let Some(packed) = scratch.came.get(current as usize) else {
@@ -659,12 +687,12 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     fn is_open_around(&self, state: State) -> bool {
         let here = self.grid.point(state.node);
         let reach = i32::try_from(self.diagonal).unwrap_or(i32::MAX / 4);
-        self.layout.track_obstruction(
+        self.layout.is_track_clear(
             self.net,
             LayerId(state.layer),
             Segment::new(here, here),
             self.width + 2 * reach,
-        ) == Obstruction::None
+        )
     }
 
     fn in_corridor(&self, node: Node) -> bool {
