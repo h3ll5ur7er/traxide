@@ -29,6 +29,16 @@ impl Buckets {
         }
     }
 
+    /// Takes out `item`, inserted with `bounds`.
+    pub(crate) fn remove(&mut self, bounds: Rect, item: usize) {
+        for cell in self.cells_in(bounds) {
+            let items = &mut self.cells[cell];
+            if let Some(at) = items.iter().position(|&i| i == item) {
+                items.swap_remove(at);
+            }
+        }
+    }
+
     /// Items that may touch `area`, possibly more than once and possibly not at all.
     pub(crate) fn candidates(&self, area: Rect) -> impl Iterator<Item = usize> + '_ {
         self.cells_in(area)
@@ -102,5 +112,16 @@ mod tests {
         let mut buckets = Buckets::new(rect(0, 0, 100, 100), 10);
         buckets.insert(rect(-50, -50, -40, -40), 3);
         assert!(buckets.candidates(rect(-45, -45, -44, -44)).any(|i| i == 3));
+    }
+
+    #[test]
+    fn an_item_removed_is_found_in_none_of_its_cells_and_the_rest_stay() {
+        let mut buckets = Buckets::new(rect(0, 0, 100, 100), 10);
+        buckets.insert(rect(5, 5, 25, 5), 7);
+        buckets.insert(rect(5, 5, 6, 6), 8);
+        buckets.remove(rect(5, 5, 25, 5), 7);
+        assert!(!buckets.candidates(rect(0, 0, 100, 100)).any(|i| i == 7));
+        assert!(buckets.candidates(rect(5, 5, 6, 6)).any(|i| i == 8));
+        assert!(buckets.is_empty(buckets.cell_at(Point::new(21, 5))));
     }
 }
