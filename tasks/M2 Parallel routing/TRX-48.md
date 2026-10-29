@@ -48,7 +48,7 @@ Ending negotiation after two rounds without gain left the Mars-64 boards at 62 o
 Profiled again in October 2026 (Mars-64 on one thread, gdb stack samples of a release build with line tables): a fifth of the time went into `is_near_a_via_of_its_path`, which walked each path back from every node a via could go, and half into copper queries. Two fixes, the routes the same to the byte on every board measured ([[Benchmarks#ripped-up-copper-out-of-the-index-m2-trx-48]]):
 
 - Each search state keeps how far its path has run since its last via; the walk back starts only where a via of the path can still be within reach.
-- Removing a route took its copper out of the layout by a flag, leaving it in the spatial index, where every later query walked past it: after thousands of rip-ups, mostly dead entries around the busy pins. Removing it now takes it out of the index. Issue034 routes in 39 s instead of 55 s, caniot in 54 s instead of 74 s, RelayModule in 7 s instead of 11 s.
+- Removing a route took its copper out of the layout by a flag, leaving it in the spatial index, where every later query walked past it: after thousands of rip-ups, mostly dead entries around the busy pins. Removing it now takes it out of the index. Issue034 routes in 39–41 s instead of 55–61 s, caniot in 49 s instead of 73 s, RelayModule in 7 s instead of 9–11 s; against the 90 s limit the boards route about as much as before.
 
 What is left of the copper queries is their geometry (`intersects`, `is_closer_than`), half the time on Mars-64.
 

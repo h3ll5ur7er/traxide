@@ -17,6 +17,25 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Ripped-up copper out of the index (M2, TRX-48)
+
+Profiled on Mars-64 (one thread, gdb stack samples of a release build with line tables), half the time went into copper queries and a fifth into `is_near_a_via_of_its_path`. Removing a route flagged its copper as removed but left it in the layout's spatial buckets, where every later query walked past it; after thousands of rip-ups the cells around the busy pins held mostly dead entries. Removing a route now takes its copper and holes out of the buckets. Besides: each search state keeps how far its path has run since its last via, so the walk back for a via of the path happens only where one can be within reach, and a node is found open around by asking whether anything is there rather than for every obstruction.
+
+The sessions are the same to the byte on every board measured; this machine, 4 cores, without a time limit:
+
+| Board | Before | **After** |
+| --- | --- | --- |
+| Issue269-caniot-tiny-arm | 73 s | **49 s** |
+| Issue034-Green14SegLED | 55–61 s | **39–41 s** |
+| Issue110-RelayModule | 9–11 s | **7 s** |
+| Issue015-StackOverflow | 20–24 s | 20 s |
+| Issue217-8088sbc | 8.3–8.5 s | 7.3–7.7 s |
+| Issue022, Issue027, Issue230 | 38, 25, 10 s | 35, 23, 9 s |
+| Sofle (Issue178) | 34 s | 33–34 s |
+| keyboard-tkl, median of five | 1.69 s | 1.54 s |
+
+Against the 90 s limit, where the time is spent anyway, the boards route about as much as before: Mars-64 93 connections instead of 87, Issue039 171 instead of 169, Issue113 254 instead of 258, smoothieboard 566 instead of 568; one run each, and routing against the clock varies by a few connections from run to run.
+
 ## Edge clearance by the footprint that draws a cutout (M4, TRX-62)
 
 TokenBoard's custom rule lowers the edge clearance from 0.3 to 0.2 mm at the cutouts its LED footprints draw (`A.memberOfFootprint('LED*') || B.memberOfFootprint('LED*')`). traxide now reads it, so each cutout keeps its own clearance ([[TRX-62]]). On this machine, with `--time-limit 90` as in the corpus:
