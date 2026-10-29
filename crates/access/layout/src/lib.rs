@@ -7,7 +7,7 @@ mod outline;
 
 use buckets::Buckets;
 use outline::Outline;
-use traxide_contracts::geometry::{Point, Rect, Segment, Shape};
+use traxide_contracts::geometry::{Point, Polygon, Rect, Segment, Shape};
 use traxide_contracts::{
     ConnectionId, ConstraintSet, Design, KeepoutScope, LayerId, LayoutAccess, NetId, Obstruction,
     Routes, Via, ViaKindId,
@@ -152,7 +152,10 @@ impl<'a> Layout<'a> {
             shape,
             bounds,
         });
-        self.layers[layer.index()].insert(bounds, id);
+        let shape = &self.obstacles[id].shape;
+        self.layers[layer.index()].insert_touching(bounds, id, |cell| {
+            shape.is_closer_than(&Shape::Polygon(Polygon::rectangle(cell)), reach + 1)
+        });
         id
     }
 
