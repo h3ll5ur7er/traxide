@@ -51,6 +51,17 @@ const TIDYING_VIA_COST: i64 = 4;
 /// cheapest, made tidying take as long as routing on small boards.
 const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
 
+/// Taking out hops, a grid edge overlapping a routed connection costs this
+/// share of a via: crossing a track overlaps it for some 8 edges at 0.1 mm,
+/// so a crossing costs about two vias. On TokenBoard a quarter of a via per
+/// edge left 379 vias of 446, a sixteenth 405, half a via 428: crossed
+/// cheaply, more tracks have to move, and fewer of them find room again.
+const CROSSING_EDGES_PER_VIA: i64 = 4;
+
+/// Moving tracks makes room for further hops to go: on TokenBoard a second
+/// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
+const MOST_HOP_PASSES: usize = 2;
+
 pub struct Router<'a> {
     finder: Finder<'a>,
     /// One per thread: each search needs its own memory.
@@ -151,6 +162,14 @@ impl<'a> Router<'a> {
         };
         if !cancel.is_cancelled() && !self.is_past_deadline() {
             self.tidy(&mut best, plan, layout, cancel);
+            let mut changed = None;
+            for _ in 0..MOST_HOP_PASSES {
+                let moved = self.take_out_hops(&mut best, plan, layout, changed.as_deref(), cancel);
+                if moved.is_empty() {
+                    break;
+                }
+                changed = Some(moved);
+            }
             self.continue_lanes(&mut best, plan, layout, cancel);
         }
         best.into_result(plan)
@@ -209,6 +228,128 @@ impl<'a> Router<'a> {
             }
             layout.add_route(id, routes);
         }
+    }
+
+    /// Takes out the vias of each routed connection that changes layers more
+    /// often than it must, where moving the copper it passes makes room.
+    /// Tidying searched it among the rest crossing nothing; now it may cross
+    /// routed connections at a price for each grid edge it overlaps them, with vias as dear as
+    /// tidying makes them, and takes the way found if it has fewer vias. What
+    /// it crosses routes again among the rest, crossing nothing. The change
+    /// stays only if all of them route and their vias together fall: a hop
+    /// under a track that could run elsewhere goes, a hop under a track that
+    /// must stay where it is stays. Where `near` is given, only connections
+    /// whose window meets one of its areas are tried: elsewhere nothing
+    /// changed since they were tried last. Gives the areas of the copper that
+    /// moved.
+    fn take_out_hops(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        near: Option<&[Rect]>,
+        cancel: &CancelToken,
+    ) -> Vec<Rect> {
+        let dearer = Profile {
+            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
+            ..self.finder.profile.clone()
+        };
+        let finder = Finder {
+            profile: &dearer,
+            ..self.finder
+        };
+        let no_history = history::History::new(self.finder.design, 0);
+        let no_rip_ups = vec![0; attempt.routed.len()];
+        let crossing = search::Negotiation {
+            rip_ups: &no_rip_ups,
+            history: &no_history,
+            present: Some(dearer.via_cost / CROSSING_EDGES_PER_VIA),
+        };
+        let fewest_of: Vec<usize> = plan
+            .connections
+            .iter()
+            .map(|&connection| self.fewest_vias(connection))
+            .collect();
+        let deadline = self.deadline;
+        let scratch = &mut self.scratches[0];
+        let design = self.finder.design;
+        let margin = self.finder.profile.detour_margin;
+        let mut moved_areas = Vec::new();
+        for (i, &fewest) in fewest_of.iter().enumerate() {
+            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+                return Vec::new();
+            }
+            let connection = plan.connections[i];
+            let Some(routes) = attempt.routed[i].clone() else {
+                continue;
+            };
+            if routes.vias.len() <= fewest {
+                continue;
+            }
+            if let Some(near) = near {
+                let window = search::window(design, margin, connection, None);
+                if !near.iter().any(|area| area.intersects(window)) {
+                    continue;
+                }
+            }
+            let id = ConnectionId::from_index(i);
+            layout.remove_route(id);
+            let moved = finder
+                .search(scratch, connection, layout, Some(crossing), None)
+                .ok()
+                .filter(|found| found.vias.len() < routes.vias.len());
+            let Some(moved) = moved else {
+                layout.add_route(id, &routes);
+                continue;
+            };
+            let crossed = routed_obstructions(layout, &moved);
+            for &other in &crossed {
+                layout.remove_route(other);
+            }
+            layout.add_route(id, &moved);
+            let mut rerouted = Vec::new();
+            for &other in &crossed {
+                match finder.search(scratch, plan.connections[other.index()], layout, None, None) {
+                    Ok(route) => {
+                        layout.add_route(other, &route);
+                        rerouted.push(route);
+                    }
+                    Err(_) => break,
+                }
+            }
+            let vias_of = |routed: &Option<Routes>| routed.as_ref().map_or(0, |r| r.vias.len());
+            let before = routes.vias.len()
+                + crossed
+                    .iter()
+                    .map(|other| vias_of(&attempt.routed[other.index()]))
+                    .sum::<usize>();
+            let after =
+                moved.vias.len() + rerouted.iter().map(|route| route.vias.len()).sum::<usize>();
+            if rerouted.len() == crossed.len() && after < before {
+                let old = std::iter::once(&routes).chain(
+                    crossed
+                        .iter()
+                        .filter_map(|other| attempt.routed[other.index()].as_ref()),
+                );
+                let new = std::iter::once(&moved).chain(&rerouted);
+                moved_areas.extend(old.chain(new).filter_map(copper_bounds));
+                attempt.routed[i] = Some(moved);
+                for (other, route) in crossed.into_iter().zip(rerouted) {
+                    attempt.routed[other.index()] = Some(route);
+                }
+            } else {
+                layout.remove_route(id);
+                layout.add_route(id, &routes);
+                for &other in &crossed {
+                    layout.remove_route(other);
+                    if let Some(theirs) = &attempt.routed[other.index()] {
+                        layout.add_route(other, theirs);
+                    }
+                }
+            }
+        }
+        moved_areas
     }
 
     /// Routes each routed connection once more whose pad has lanes of the
@@ -944,6 +1085,15 @@ fn record_collisions(
             history.record_via(via.position, radius, copper.iter().map(|c| c.layer));
         }
     }
+}
+
+/// The box around the corners of `routes`' tracks and its vias.
+fn copper_bounds(routes: &Routes) -> Option<Rect> {
+    Rect::around(
+        (routes.tracks.iter())
+            .flat_map(|track| track.path.iter().copied())
+            .chain(routes.vias.iter().map(|via| via.position)),
+    )
 }
 
 /// The routed connections that `routes` would overlap, in id order.

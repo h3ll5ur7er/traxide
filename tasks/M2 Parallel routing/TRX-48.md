@@ -52,6 +52,8 @@ Profiled again in October 2026 (Mars-64 on one thread, gdb stack samples of a re
 
 Next, the spatial index listed each obstacle in every cell of its bounding box, where a diagonal track or a keepout reaches only a few: it now lists each only in the cells it reaches. Sofle routes in 7.5 s instead of 30.5 s (803 keepouts), the keyboard in 1.25 s instead of 1.48 s, most boards 10–20 % faster, the sessions the same ([[Benchmarks#copper-listed-only-where-it-reaches-m2-trx-48]]). Searching the next connections side by side and committing them in order while nothing before them changed what they explored was simulated first and not built: at most 1.35× on Issue034, nothing on Issue015, as the long searches explore what every commit changes.
 
+Profiled after that on Issue015: the copper queries are down to a fifth of the time, the open list's heap and the state arrays a third. A heap with four children per node instead of the standard binary heap, the same order of states, was no faster (0–8 % slower on five boards) and was not kept.
+
 What is left of the copper queries is their geometry (`intersects`, `is_closer_than`), half the time on Mars-64.
 
 Done so far: negotiation that ends when it goes round in circles ([[Benchmarks#negotiation-that-goes-round-in-circles-m2-trx-48]]), far polygon edges passed over at a glance (Issue110 in 40 s instead of 132 s), an indexed outline (three times cheaper expansions on boards with rounded corners) and one search state per node and layer instead of nine (up to 2.5 times faster), [[Benchmarks#one-state-per-node-m2-trx-48]].
