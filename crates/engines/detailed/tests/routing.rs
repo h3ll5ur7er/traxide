@@ -1121,3 +1121,31 @@ fn the_layout_holds_the_copper_of_the_attempt_kept_and_no_other() {
         }
     }
 }
+
+#[test]
+fn a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out() {
+    // B, routed first, runs straight on the first layer; the walls leave A no
+    // way round B's ends, so A hops under it. B's through-hole pads let it run
+    // on the second layer as well, where A no longer needs a via at all.
+    let design = DesignBuilder::new(20.0, 20.0)
+        .layers(2)
+        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .tht("B1", Some("B"), at(10.0, 3.0), 1.2)
+        .tht("B2", Some("B"), at(10.0, 17.0), 1.2)
+        .keepout(
+            wall(at(9.0, 0.0), at(11.0, 2.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.0, 18.0), at(11.0, 20.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("B1", "B2"), ("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}

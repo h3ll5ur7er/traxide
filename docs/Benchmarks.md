@@ -17,6 +17,22 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Hops taken out by moving what they pass (M5, TRX-76)
+
+Routed by Freerouting, TokenBoard has 199 new vias; routed by traxide, 446, with the same length of track. 250 of traxide's are in pairs that hop under 6 mm of the other layer to pass another track (Freerouting: 44). After tidying, each connection with more vias than it needs is searched again with vias four times dearer, allowed to cross routed connections at a quarter of a via per grid edge it overlaps them; what it crosses routes again among the rest, crossing nothing, and the change stays only if all of them route and their vias together fall. A second pass tries only connections near what moved. This machine, `--time-limit 90`, every board as complete as before and no rule broken that main does not break:
+
+| Board | Vias before | **After** | Time before | After |
+| --- | --- | --- | --- | --- |
+| TokenBoard's KiCad board | 446 | **363** | 34 s | 60 s |
+| Sofle (Issue178) | 518 | **471** | 6.8 s | 19.6 s |
+| Issue015-StackOverflow | 98 | **74** | 13.8 s | 19.2 s |
+| Issue034-Green14SegLED | 150 | **134** | 33.6 s | 34.8 s |
+| Issue110-RelayModule | 64 | **54** | 5.8 s | 7.1 s |
+| Issue230-CNH | 92 | **88** | 6.0 s | 8.9 s |
+| keyboard-tkl | 93 | **87** | 1.5 s | 3.2 s |
+
+Preferred layer directions, measured again now that TokenBoard routes well within the limit, still cost vias: a step across a layer's direction paying 25 %, 50 % or 100 % of its length extra gave 456, 517 and 624 vias instead of 446 ([[TRX-76]]).
+
 ## Copper listed only where it reaches (M2, TRX-48)
 
 The layout's spatial index, 1 mm cells per layer, listed each obstacle in every cell of its bounding box. A diagonal track's box is a square, and a keepout's box can be far larger than the keepout: in those cells every query found the obstacle, passed the bounding-box test and checked it exactly. Each obstacle is now listed only in the cells it reaches (the cell's square against the shape, with the keepout's clearance; the outermost cells stand for everything beyond the board, as before). Same sessions to the byte; this machine, 4 cores:
