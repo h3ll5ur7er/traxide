@@ -204,3 +204,35 @@ fn a_shortcut_that_runs_on_in_the_tracks_direction_leaves_no_corner() {
     let tight = pulled_tight(&design, &routes);
     assert_eq!(tight.tracks[0].path, [at(2.0, 10.0), at(18.0, 10.0)]);
 }
+
+#[test]
+fn a_track_of_its_net_ending_on_another_stays_joined_to_it() {
+    // B ends on A's track where A detours: pulled straight, A would leave B's
+    // end in the air, so A keeps that point.
+    let design = two_pads()
+        .smd("A3", Some("A"), at(10.0, 17.0), 1.0, 0)
+        .build();
+    let joint = at(10.0, 13.0);
+    let routes = Routes {
+        tracks: vec![
+            track(
+                &design,
+                "A",
+                0,
+                &[at(2.0, 10.0), at(5.0, 13.0), at(15.0, 13.0), at(18.0, 10.0)],
+            ),
+            track(&design, "A", 0, &[at(10.0, 17.0), joint]),
+        ],
+        vias: Vec::new(),
+    };
+    let tight = pulled_tight(&design, &routes);
+    let on_a = tight.tracks[0].path.windows(2).any(|w| {
+        let (ab, aj) = (w[1] - w[0], joint - w[0]);
+        i64::from(ab.x) * i64::from(aj.y) == i64::from(ab.y) * i64::from(aj.x)
+            && (w[0].x.min(w[1].x)..=w[0].x.max(w[1].x)).contains(&joint.x)
+            && (w[0].y.min(w[1].y)..=w[0].y.max(w[1].y)).contains(&joint.y)
+    });
+    assert!(on_a, "{:?}", tight.tracks[0].path);
+    assert_eq!(tight.tracks[1].path.last(), Some(&joint));
+    assert_legal(&design, &tight);
+}

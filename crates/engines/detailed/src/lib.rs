@@ -21,7 +21,7 @@ use std::time::Instant;
 use traxide_contracts::geometry::{Point, Rect, Segment};
 use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Corridors, Design, Event, LayoutAccess, NetId,
-    Obstruction, Plan, Profile, Routes, RoutingResult,
+    Obstruction, PadId, Plan, Profile, Routes, RoutingResult,
 };
 use traxide_events::{CancelToken, Publisher};
 
@@ -171,6 +171,7 @@ impl<'a> Router<'a> {
                 changed = Some(moved);
             }
             self.continue_lanes(&mut best, plan, layout, cancel);
+            self.grow_trees(&mut best, plan, layout, cancel);
         }
         best.into_result(plan)
     }
@@ -350,6 +351,84 @@ impl<'a> Router<'a> {
             }
         }
         moved_areas
+    }
+
+    /// Routes each routed connection once more from any copper of its net
+    /// already joined to its first pad to any joined to its second, among the
+    /// rest without crossing them, with vias as dear as tidying makes them,
+    /// and keeps the new way if it has fewer vias, or as many and is shorter:
+    /// a pad beside its net's track joins the track, as a tree grows, rather
+    /// than running beside it to a pad further on. A connection that another
+    /// now ends on stays where it is from then on, so nothing comes apart;
+    /// so this comes last, when no rip-up moves anything any more. The
+    /// shortest routes go first, so branches join trunks rather than trunks
+    /// moving onto their branches.
+    fn grow_trees(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let dearer = Profile {
+            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
+            ..self.finder.profile.clone()
+        };
+        let finder = Finder {
+            profile: &dearer,
+            ..self.finder
+        };
+        let deadline = self.deadline;
+        let scratch = &mut self.scratches[0];
+        let mut carrying = vec![false; attempt.routed.len()];
+        let mut order: Vec<usize> = (0..attempt.routed.len()).collect();
+        order.sort_by_key(|&i| (attempt.routed[i].as_ref().map_or(0, track_length), i));
+        for i in order {
+            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+                return;
+            }
+            let connection = plan.connections[i];
+            let Some(routes) = attempt.routed[i].clone() else {
+                continue;
+            };
+            if carrying[i] {
+                continue;
+            }
+            let sides = joined_without(plan, &attempt.routed, i);
+            let copper_of = |side: &[usize]| -> Vec<Routes> {
+                side.iter()
+                    .filter_map(|&other| attempt.routed[other].clone())
+                    .collect()
+            };
+            let (from, to) = (copper_of(&sides[0]), copper_of(&sides[1]));
+            if from.is_empty() && to.is_empty() {
+                continue;
+            }
+            let id = ConnectionId::from_index(i);
+            layout.remove_route(id);
+            // A way of no copper starts where the copper of both sides lies on
+            // top of each other, which pulling tight may part, as it keeps
+            // only the points where a track ends on another.
+            let grown = finder
+                .search_joining(scratch, connection, layout, &from, &to)
+                .ok()
+                .filter(|grown| !grown.tracks.is_empty() || !grown.vias.is_empty())
+                .filter(|grown| is_tidier(grown, &routes));
+            let Some(grown) = grown else {
+                layout.add_route(id, &routes);
+                continue;
+            };
+            for &other in sides.iter().flatten() {
+                if let Some(theirs) = &attempt.routed[other]
+                    && ends_on(&grown, theirs)
+                {
+                    carrying[other] = true;
+                }
+            }
+            layout.add_route(id, &grown);
+            attempt.routed[i] = Some(grown);
+        }
     }
 
     /// Routes each routed connection once more whose pad has lanes of the
@@ -858,6 +937,29 @@ impl Finder<'_> {
 
     /// A route reaching the pads with lanes of the board's wiring only at the
     /// lanes' free ends, crossing nothing routed.
+    /// A route from any of `from`, copper already joined to the first pad,
+    /// or the pad itself, to any of `to` or the second pad, crossing nothing.
+    fn search_joining(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+        from: &[Routes],
+        to: &[Routes],
+    ) -> Result<Routes, NoRoute> {
+        let search = search::Search::new(
+            self.design,
+            self.rules,
+            self.profile,
+            connection,
+            layout,
+            None,
+            None,
+        );
+        let steps = search.joining(from, to).run(scratch)?;
+        Ok(self.routes(&steps, connection))
+    }
+
     fn search_by_lanes(
         &self,
         scratch: &mut search::Scratch,
@@ -884,6 +986,79 @@ impl Finder<'_> {
             self.rules.track_width(connection.net),
         )
     }
+}
+
+/// The connections of connection `i`'s net joined, by routed connections
+/// other than `i`, to its first pad and to its second.
+fn joined_without(plan: &Plan, routed: &[Option<Routes>], i: usize) -> [Vec<usize>; 2] {
+    let net = plan.connections[i].net;
+    let mut parent: HashMap<PadId, PadId> = HashMap::new();
+    let members: Vec<usize> = (0..plan.connections.len())
+        .filter(|&k| k != i && plan.connections[k].net == net && routed[k].is_some())
+        .collect();
+    for &k in &members {
+        let c = plan.connections[k];
+        let (a, b) = (root(&mut parent, c.from), root(&mut parent, c.to));
+        if a != b {
+            parent.insert(a, b);
+        }
+    }
+    let ends = [plan.connections[i].from, plan.connections[i].to];
+    ends.map(|end| {
+        let side = root(&mut parent, end);
+        members
+            .iter()
+            .copied()
+            .filter(|&k| root(&mut parent, plan.connections[k].from) == side)
+            .collect()
+    })
+}
+
+/// The pad standing for `pad`'s group of joined pads.
+fn root(parent: &mut HashMap<PadId, PadId>, pad: PadId) -> PadId {
+    let up = *parent.get(&pad).unwrap_or(&pad);
+    if up == pad {
+        return pad;
+    }
+    let top = root(parent, up);
+    parent.insert(pad, top);
+    top
+}
+
+fn track_length(routes: &Routes) -> i64 {
+    (routes.tracks.iter())
+        .flat_map(|t| t.path.windows(2))
+        .map(|w| w[0].distance(w[1]))
+        .sum()
+}
+
+/// Whether `new` has fewer vias than `old`, or as many and shorter tracks.
+fn is_tidier(new: &Routes, old: &Routes) -> bool {
+    (new.vias.len(), track_length(new)) < (old.vias.len(), track_length(old))
+}
+
+/// Whether a track of `routes` starts or ends on `theirs`: on one of their
+/// tracks or vias.
+fn ends_on(routes: &Routes, theirs: &Routes) -> bool {
+    let on = |at: Point| {
+        theirs.vias.iter().any(|v| v.position == at)
+            || (theirs.tracks.iter())
+                .flat_map(|t| t.path.windows(2))
+                .any(|w| lies_on(w[0], w[1], at))
+    };
+    (routes.tracks.iter())
+        .flat_map(|t| [t.path.first(), t.path.last()])
+        .flatten()
+        .any(|&at| on(at))
+}
+
+/// Whether `at` lies on the segment from `a` to `b`.
+fn lies_on(a: Point, b: Point, at: Point) -> bool {
+    let (ab, aat) = (b - a, at - a);
+    let cross = i64::from(ab.x) * i64::from(aat.y) - i64::from(ab.y) * i64::from(aat.x);
+    cross == 0
+        && (a.x.min(b.x)..=a.x.max(b.x)).contains(&at.x)
+        && (a.y.min(b.y)..=a.y.max(b.y)).contains(&at.y)
 }
 
 /// Whether a track of `routes` ends at `at`, or a via stands there.
