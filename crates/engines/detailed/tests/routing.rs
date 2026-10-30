@@ -1178,3 +1178,28 @@ fn a_pad_beside_its_nets_track_joins_the_track_rather_than_the_far_pad() {
     );
     assert_legal(&design, &result.routes);
 }
+
+#[test]
+fn a_pad_on_its_nets_track_keeps_a_track_of_its_own() {
+    // P3 lies on P1's track to P2, which joins it only by lying over it:
+    // pulled tight later, that track may move off P3. Growing trees leaves
+    // P3's connection some copper that ends at P3.
+    let design = DesignBuilder::new(20.0, 20.0)
+        .smd("P1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("P2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .smd("P3", Some("A"), at(10.0, 10.0), 1.0, 0)
+        .build();
+    let result = route(&design, &[("P1", "P2"), ("P3", "P1")]);
+    assert!(result.unrouted.is_empty());
+    let p3 = at(10.0, 10.0);
+    assert!(
+        result
+            .routes
+            .tracks
+            .iter()
+            .any(|t| t.path.first() == Some(&p3) || t.path.last() == Some(&p3)),
+        "{:?}",
+        result.routes.tracks
+    );
+    assert_legal(&design, &result.routes);
+}

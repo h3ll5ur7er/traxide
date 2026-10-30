@@ -59,3 +59,5 @@ What is left on TokenBoard's COL4 (26 vias, now 22; Freerouting 13): short hops 
 | Issue035-ReadPlaceScope | 86 | | **77** | 1.9 s | 4.2 s |
 
 Every board as complete as on main, with the same rules broken (the boards' own). TokenBoard's new copper: 10,061 mm of track in 2,494 segments (main 10,109 mm in 2,728; Freerouting 10,070 mm in 1,915). The trees' search ends anywhere in the box around the target pad and its joined copper, so its estimate is the distance to that box: towards the far pad, it ended on the first copper on the way rather than the nearest.
+
+**Fixed before merging** (CI on PR #31): Issue026, Issue179 and DAC2020_bm04 lost a net each. Where the copper of both sides of a connection lay on top of each other, the trees' search found a way of no copper at all, which is shorter than any, and the connection was dropped; the net then hung together only by tracks lying over each other in mid-run, which pulling tight, keeping only the points where a track ends on another, parted. A way of no copper is no longer taken (`a_pad_on_its_nets_track_keeps_a_track_of_its_own`).

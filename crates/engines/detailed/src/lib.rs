@@ -407,9 +407,13 @@ impl<'a> Router<'a> {
             }
             let id = ConnectionId::from_index(i);
             layout.remove_route(id);
+            // A way of no copper starts where the copper of both sides lies on
+            // top of each other, which pulling tight may part, as it keeps
+            // only the points where a track ends on another.
             let grown = finder
                 .search_joining(scratch, connection, layout, &from, &to)
                 .ok()
+                .filter(|grown| !grown.tracks.is_empty() || !grown.vias.is_empty())
                 .filter(|grown| is_tidier(grown, &routes));
             let Some(grown) = grown else {
                 layout.add_route(id, &routes);
