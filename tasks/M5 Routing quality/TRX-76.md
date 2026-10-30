@@ -2,7 +2,7 @@
 id: TRX-76
 title: Take out via hops by moving what they hop over
 type: improvement
-status: in-progress
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing, optimization]

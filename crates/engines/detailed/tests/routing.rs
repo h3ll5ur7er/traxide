@@ -390,7 +390,7 @@ fn scattered_nets() -> (Design, Vec<(String, String)>) {
 }
 
 #[test]
-fn a_board_routed_again_with_layer_directions_stays_complete_and_legal() {
+fn a_board_routed_three_ways_stays_complete_and_legal() {
     let (design, pairs) = scattered_nets();
     let pairs: Vec<(&str, &str)> = pairs
         .iter()
@@ -415,6 +415,7 @@ fn the_routes_do_not_depend_on_the_number_of_threads() {
     let batched = Profile {
         batch_size: 8,
         heuristic_weight: 1.2,
+        against_layer_direction: 0.5,
         ..profile()
     };
     let on_one = route_on_threads(&design, &batched, &pairs, None, 1);
