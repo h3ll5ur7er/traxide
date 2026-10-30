@@ -52,6 +52,12 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Zones of higher priority poured first (M5, TRX-78)
+
+TokenBoard's In2.Cu holds a +3V3 zone of priority 2 inside a VLED zone of priority 0, which KiCad pours around it. traxide read no priorities and let neither fill where they overlap, so it saw none of the author's +3V3 vias on their plane: planning routed 27 connections for the net with 9 vias, and `traxide check` counted Freerouting's routing 240 of 241 nets complete. A plane now gives way only to another net's plane of at least its priority. +3V3 needs 2 connections and 1 via, as in Freerouting's routing, which `traxide check` now counts complete (241 of 241 nets, no pad unconnected).
+
+The board as a whole routes no better: without a limit 313 vias instead of 292, in 108 s instead of 92 s. That is within how far the routing moves on small changes: main routes TokenBoard with 304 vias with a via cost of 1.99 instead of 2.0, and 292 with 2.01.
+
 ## Copper listed only where it reaches (M2, TRX-48)
 
 The layout's spatial index, 1 mm cells per layer, listed each obstacle in every cell of its bounding box. A diagonal track's box is a square, and a keepout's box can be far larger than the keepout: in those cells every query found the obstacle, passed the bounding-box test and checked it exactly. Each obstacle is now listed only in the cells it reaches (the cell's square against the shape, with the keepout's clearance; the outermost cells stand for everything beyond the board, as before). Same sessions to the byte; this machine, 4 cores:

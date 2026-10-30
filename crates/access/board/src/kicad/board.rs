@@ -509,6 +509,15 @@ impl<'a> Reader<'a> {
         };
         let clearance = setting(zone.child("connect_pads"), "clearance")?;
         let min_width = setting(Some(zone), "min_thickness")?;
+        let priority = match zone.child("priority") {
+            Some(priority) => {
+                let text = priority.arg_atom(0, "priority")?;
+                text.parse().map_err(|_| {
+                    priority.invalid(format!("priority is not a whole number: {text}"))
+                })?
+            }
+            None => 0,
+        };
         for outline in zone.children("polygon") {
             let points = points(outline.required_child("pts")?)?;
             let Some(polygon) = Polygon::new(distinct(points)) else {
@@ -521,6 +530,7 @@ impl<'a> Reader<'a> {
                     outline: polygon.clone(),
                     clearance,
                     min_width,
+                    priority,
                 });
             }
         }
@@ -540,6 +550,7 @@ impl<'a> Reader<'a> {
                     holes: Vec::new(),
                     clearance: zone.clearance,
                     min_width: zone.min_width,
+                    priority: zone.priority,
                 })
             })
             .collect()
@@ -974,6 +985,7 @@ struct Zone<'a> {
     outline: Polygon,
     clearance: i32,
     min_width: i32,
+    priority: u32,
 }
 
 /// A drawing on the Edge.Cuts layer.
@@ -1233,6 +1245,20 @@ mod tests {
         );
         let plane = &design.planes[0];
         assert_eq!((plane.clearance, plane.min_width), (MM / 2, MM / 5));
+    }
+
+    #[test]
+    fn a_planes_priority_is_its_zones() {
+        let design = board(
+            r#"(footprint "J" (at 5 5) (property "Reference" "J1")
+                 (pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu") (net "GND")))
+               (zone (net "GND") (net_name "GND") (layer "B.Cu") (priority 2)
+                 (polygon (pts (xy 1 1) (xy 9 1) (xy 9 9) (xy 1 9))))
+               (zone (net "GND") (net_name "GND") (layer "F.Cu")
+                 (polygon (pts (xy 1 1) (xy 9 1) (xy 9 9) (xy 1 9))))"#,
+        );
+        let priorities: Vec<u32> = design.planes.iter().map(|p| p.priority).collect();
+        assert_eq!(priorities, [2, 0]);
     }
 
     #[test]

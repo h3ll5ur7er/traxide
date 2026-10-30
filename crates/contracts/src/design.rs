@@ -129,6 +129,18 @@ pub struct Plane {
     pub clearance: i32,
     /// How narrow its fill may get: narrower necks are left out of it.
     pub min_width: i32,
+    /// Where it overlaps a plane of another net of lower priority, it fills
+    /// and the other pours around it; of the same priority, the board program
+    /// chooses.
+    pub priority: u32,
+}
+
+impl Plane {
+    /// Whether `other` keeps this plane's fill out where they overlap: a plane
+    /// of another net on its layer, of at least its priority.
+    pub fn gives_way_to(&self, other: &Plane) -> bool {
+        other.layer == self.layer && other.net != self.net && other.priority >= self.priority
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

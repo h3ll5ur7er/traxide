@@ -310,6 +310,21 @@ mod tests {
     }
 
     #[test]
+    fn a_plane_joins_its_pads_where_a_plane_of_another_net_of_lower_priority_overlaps_it() {
+        let design = DesignBuilder::new(30.0, 10.0)
+            .layers(3)
+            .plane_layer(1)
+            .plane("VCC", 1, at(0.0, 0.0), at(30.0, 10.0))
+            .plane_of_priority("GND", 1, at(0.0, 0.0), at(20.0, 10.0), 2)
+            .tht("J1", Some("GND"), at(2.0, 2.0), 1.6)
+            .tht("J2", Some("GND"), at(18.0, 8.0), 1.6)
+            .tht("J3", Some("GND"), at(25.0, 8.0), 1.6)
+            .tht("V1", Some("VCC"), at(25.0, 2.0), 1.6)
+            .build();
+        assert_eq!(pads_of(&design, &plan(&design)), pairs(&[("J2", "J3")]));
+    }
+
+    #[test]
     fn a_via_of_the_board_on_a_plane_joins_the_copper_it_carries() {
         let mut design = DesignBuilder::new(30.0, 10.0)
             .layers(3)
