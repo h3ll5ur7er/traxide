@@ -33,4 +33,10 @@ pub struct Profile {
     /// threads, it can change the result, as it changes the order in which
     /// rip-ups queue connections again.
     pub batch_size: u32,
+    /// What a step across its layer's direction costs, as a share of its
+    /// length; a diagonal step pays half. Each layer runs either way, chosen
+    /// from how the board routes without directions, which it is routed again
+    /// against; the routing with fewer vias stays. Zero routes once, with no
+    /// directions.
+    pub against_layer_direction: f64,
 }

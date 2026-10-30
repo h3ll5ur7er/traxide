@@ -16,6 +16,7 @@ fn profile() -> Profile {
         heuristic_weight: 1.0,
         global_routing: true,
         batch_size: 1,
+        against_layer_direction: 0.0,
     }
 }
 

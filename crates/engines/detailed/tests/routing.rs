@@ -22,6 +22,7 @@ fn profile() -> Profile {
         heuristic_weight: 1.0,
         global_routing: false,
         batch_size: 1,
+        against_layer_direction: 0.0,
     }
 }
 
@@ -386,6 +387,22 @@ fn scattered_nets() -> (Design, Vec<(String, String)>) {
         pairs.push((ends[0].clone(), ends[1].clone()));
     }
     (builder.build(), pairs)
+}
+
+#[test]
+fn a_board_routed_again_with_layer_directions_stays_complete_and_legal() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let directed = Profile {
+        against_layer_direction: 0.5,
+        ..profile()
+    };
+    let result = route_with(&design, &directed, &pairs);
+    assert!(result.unrouted.is_empty(), "{:?}", result.unrouted);
+    assert_legal(&design, &result.routes);
 }
 
 #[test]

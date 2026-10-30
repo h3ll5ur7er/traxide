@@ -195,6 +195,24 @@ pub(crate) struct Search<'a, L> {
     joined: [&'a [Routes]; 2],
     /// The box around each pad and the copper joined to it, where some is.
     joined_boxes: [Option<Rect>; 2],
+    directions: Directions,
+}
+
+/// Which way each layer's tracks run, and what a step across that costs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Directions {
+    /// What a straight step across its layer's direction costs beyond its
+    /// length, in thousandths of it; a diagonal step pays half. Zero: none.
+    pub(crate) against_per_mille: i64,
+    /// The layers whose tracks run horizontally, by bit; the others' run
+    /// vertically.
+    pub(crate) horizontal_layers: u64,
+}
+
+impl Directions {
+    fn is_horizontal(self, layer: u32) -> bool {
+        self.horizontal_layers & 1 << layer != 0
+    }
 }
 
 impl<'a, L: LayoutAccess> Search<'a, L> {
@@ -233,7 +251,54 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             weight_per_mille: (profile.heuristic_weight * 1000.0).round() as i64,
             joined: [&[], &[]],
             joined_boxes: [None, None],
+            directions: Directions::default(),
         }
+    }
+
+    /// The same search, with each layer's tracks running the way `directions`
+    /// says.
+    pub(crate) fn with_directions(&self, directions: Directions) -> Self {
+        Self {
+            directions,
+            ..*self
+        }
+    }
+
+    /// What a step of `length` by (dx, dy) on `layer` costs for running
+    /// across the layer's direction.
+    fn against_direction(&self, layer: u32, (dx, dy): (i32, i32), length: i64) -> i64 {
+        let share = self.directions.against_per_mille;
+        if share == 0 {
+            0
+        } else if dx != 0 && dy != 0 {
+            length * share / 2000
+        } else if (dy != 0) == self.directions.is_horizontal(layer) {
+            length * share / 1000
+        } else {
+            0
+        }
+    }
+
+    /// The least a way of (dx, dy), both positive, costs on `layer`, its
+    /// direction's price included: a diagonal and a straight stretch, or the
+    /// two straight stretches.
+    fn on_layer(&self, layer: u32, dx: i64, dy: i64) -> i64 {
+        let (along, across) = if self.directions.is_horizontal(layer) {
+            (dx, dy)
+        } else {
+            (dy, dx)
+        };
+        let share = self.directions.against_per_mille;
+        let pitch = i64::from(self.profile.grid_pitch);
+        let diagonal = |n: i64| n * self.diagonal / pitch * (2000 + share) / 2000;
+        let across_cost = |n: i64| n * (1000 + share) / 1000;
+        let straight = along + across_cost(across);
+        let with_diagonal = if along >= across {
+            diagonal(across) + (along - across)
+        } else {
+            diagonal(along) + across_cost(across - along)
+        };
+        straight.min(with_diagonal)
     }
 
     /// The same search, starting on `from` as well as at the first pad, and
@@ -494,7 +559,10 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         layer: state.layer,
                         heading: direction as u8,
                     };
-                    let cost = length + i64::from(turn) * self.profile.bend_cost + extra;
+                    let cost = length
+                        + i64::from(turn) * self.profile.bend_cost
+                        + extra
+                        + self.against_direction(state.layer, (*dx, *dy), length);
                     relax(Some(next), cost, None, scratch);
                 }
             }
@@ -786,19 +854,30 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     .is_track_clear(self.net, layer, segment, self.width)
             })
         };
+        let against = |layer: LayerId, path: &[Point]| -> i64 {
+            (path.windows(2))
+                .map(|pair| {
+                    let (dx, dy) = (pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+                    let length = pair[0].distance(pair[1]);
+                    self.against_direction(layer.0, (dx.signum(), dy.signum()), length)
+                })
+                .sum()
+        };
         self.routable_layers(self.from)
             .filter(|&layer| self.to.is_on(layer))
-            .find_map(|layer| {
+            .filter_map(|layer| {
                 let path = candidates.iter().find(|path| fits(layer, path))?;
-                Some(
-                    path.iter()
-                        .map(|&at| Step {
-                            at,
-                            layer,
-                            via: None,
-                        })
-                        .collect(),
-                )
+                Some((layer, path))
+            })
+            .min_by_key(|&(layer, path)| against(layer, path))
+            .map(|(layer, path)| {
+                path.iter()
+                    .map(|&at| Step {
+                        at,
+                        layer,
+                        via: None,
+                    })
+                    .collect()
             })
     }
 
@@ -1033,12 +1112,15 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             // A lane may end on any layer, so no via is certain.
             return (octilinear - self.to_reach).max(0);
         }
-        let via = if self.to.is_on(LayerId(state.layer)) {
-            0
-        } else {
-            self.profile.via_cost
-        };
-        octilinear + via
+        if !self.to.is_on(LayerId(state.layer)) {
+            return octilinear + self.profile.via_cost;
+        }
+        if self.directions.against_per_mille == 0 {
+            return octilinear;
+        }
+        // Staying on the layer pays its direction; leaving it, a via at least.
+        self.on_layer(state.layer, dx, dy)
+            .min(octilinear + self.profile.via_cost)
     }
 
     /// The estimate as the search ranks states: weighted by the profile, so the
@@ -1248,6 +1330,7 @@ mod tests {
             heuristic_weight: 2.0,
             global_routing: false,
             batch_size: 1,
+            against_layer_direction: 0.0,
         };
         let plan = Plan {
             connections: vec![Connection {
@@ -1272,5 +1355,53 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(scratch.expanded.len(), distinct.len());
+    }
+
+    #[test]
+    fn a_track_runs_on_the_layer_whose_direction_it_takes() {
+        let design = DesignBuilder::new(30.0, 20.0)
+            .layers(2)
+            .tht("A1", Some("A"), at(5.0, 10.0), 1.0)
+            .tht("A2", Some("A"), at(25.0, 10.0), 1.0)
+            .build();
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let layout = traxide_layout_access::Layout::build(&design, &rules);
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 0,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction: 0.5,
+        };
+        let connection = Connection {
+            net: design.net_named("A"),
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let layers_with_horizontal = |layer: u32| -> Vec<LayerId> {
+            let directions = Directions {
+                against_per_mille: 500,
+                horizontal_layers: 1 << layer,
+            };
+            let search = Search::new(&design, &rules, &profile, connection, &layout, None, None)
+                .with_directions(directions);
+            let mut steps = search.run(&mut Scratch::default()).expect("a way");
+            steps.dedup_by_key(|step| step.layer);
+            steps.iter().map(|step| step.layer).collect()
+        };
+        assert_eq!(layers_with_horizontal(0), [LayerId(0)]);
+        assert_eq!(layers_with_horizontal(1), [LayerId(1)]);
     }
 }

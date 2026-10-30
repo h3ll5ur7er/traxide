@@ -15,3 +15,6 @@ heuristic_weight = 1.2
 global_routing = false
 # Connections searched side by side, then committed in order. Fixed, so results don't depend on the number of threads.
 batch_size = 16
+# Each layer runs one way, chosen from a routing without directions; a step across costs half its length more.
+# On TokenBoard 292 vias instead of 335 with the back copper horizontal, 400 the other way round (docs/Benchmarks.md).
+against_layer_direction = 0.5

@@ -33,7 +33,24 @@ Routed by Freerouting, TokenBoard has 199 new vias; routed by traxide, 446, with
 
 Then nets grow as trees: each routed connection, shortest first, is searched again from any copper of its net already joined to its first pad to any joined to its second, and takes the new way if it has fewer vias, or as many and is shorter; TokenBoard 335 vias, Sofle 449, Issue034 125, RelayModule 53, ReadPlaceScope 77 instead of 86, and TokenBoard's track 10,061 mm in 2,494 segments (Freerouting 10,070 mm in 1,915) ([[TRX-76]]).
 
-Preferred layer directions, measured again now that TokenBoard routes well within the limit, still cost vias: a step across a layer's direction paying 25 %, 50 % or 100 % of its length extra gave 456, 517 and 624 vias instead of 446 ([[TRX-76]]).
+Preferred layer directions, with the front copper horizontal, cost vias before the hops were taken out: a step across a layer's direction paying 25 %, 50 % or 100 % of its length extra gave 456, 517 and 624 vias instead of 446 ([[TRX-76]]).
+
+## Each layer one way, as the first routing ran it (M5, TRX-77)
+
+After hops and trees, the orientation decides whether layer directions pay: on TokenBoard, whose routing runs 64 % of the back copper's track horizontally and 56 % of the front's, a step across paying half its length left 292 vias with the back horizontal and 400 with the front. So the board is routed as before, the layers are oriented crosswise through the stack as that routing leant (where it leant by 2 % of its track length or more), the board is routed again against those directions, and the routing that completes as much with fewer vias stays. This machine, `--time-limit 90`, every board as complete as on main, with the same rules broken (the boards' own):
+
+| Board | Vias on main | **Now** | Time on main | Now |
+| --- | --- | --- | --- | --- |
+| TokenBoard's KiCad board | 335 | **297** (292 without a limit) | 60 s | 92 s |
+| Sofle (Issue178) | 449 | **439** | 21.7 s | 35.7 s |
+| Issue034-Green14SegLED | 125 | **121** | 33.5 s | 71.8 s |
+| Issue110-RelayModule | 53 | **49** | 7.4 s | 25.5 s |
+| Issue230-CNH | 87 | **84** | 10.1 s | 26.4 s |
+| Issue035-ReadPlaceScope | 77 | **48** | 4.1 s | 6.6 s |
+| keyboard-tkl | 77 | **72** | 7.1 s | 22.1 s |
+| Issue015-StackOverflow (leans neither way) | 74 | 74 | 18.0 s | 19.2 s |
+
+TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
 ## Copper listed only where it reaches (M2, TRX-48)
 
