@@ -31,6 +31,8 @@ Routed by Freerouting, TokenBoard has 199 new vias; routed by traxide, 446, with
 | Issue230-CNH | 92 | **88** | 6.0 s | 8.9 s |
 | keyboard-tkl | 93 | **87** | 1.5 s | 3.2 s |
 
+Then nets grow as trees: each routed connection, shortest first, is searched again from any copper of its net already joined to its first pad to any joined to its second, and takes the new way if it has fewer vias, or as many and is shorter; TokenBoard 335 vias, Sofle 449, Issue034 125, RelayModule 53, ReadPlaceScope 77 instead of 86, and TokenBoard's track 10,061 mm in 2,494 segments (Freerouting 10,070 mm in 1,915) ([[TRX-76]]).
+
 Preferred layer directions, measured again now that TokenBoard routes well within the limit, still cost vias: a step across a layer's direction paying 25 %, 50 % or 100 % of its length extra gave 456, 517 and 624 vias instead of 446 ([[TRX-76]]).
 
 ## Copper listed only where it reaches (M2, TRX-48)

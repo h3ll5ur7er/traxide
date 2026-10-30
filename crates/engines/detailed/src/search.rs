@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use traxide_contracts::geometry::{Point, Rect, Segment, Shape};
 use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Corridors, Design, LayerId, LayoutAccess, NetId,
-    Obstruction, Pad, PadId, Profile, Via, ViaKindId,
+    Obstruction, Pad, PadId, Profile, Routes, Via, ViaKindId,
 };
 use traxide_scratch::Stamped;
 
@@ -190,6 +190,11 @@ pub(crate) struct Search<'a, L> {
     weight_per_mille: i64,
     /// The corridor global routing planned for this connection, if any.
     corridor: Option<(&'a Corridors, ConnectionId)>,
+    /// Copper of the connection's net already joined to its first pad, and
+    /// to its second: a way may start on the one and end on the other.
+    joined: [&'a [Routes]; 2],
+    /// The box around each pad and the copper joined to it, where some is.
+    joined_boxes: [Option<Rect>; 2],
 }
 
 impl<'a, L: LayoutAccess> Search<'a, L> {
@@ -226,6 +231,34 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             by_lanes_only: false,
             corridor,
             weight_per_mille: (profile.heuristic_weight * 1000.0).round() as i64,
+            joined: [&[], &[]],
+            joined_boxes: [None, None],
+        }
+    }
+
+    /// The same search, starting on `from` as well as at the first pad, and
+    /// ending on `to` as well as at the second: copper of the net already
+    /// joined to each, so that the net grows as a tree.
+    pub(crate) fn joining(&self, from: &'a [Routes], to: &'a [Routes]) -> Self {
+        let around = |copper: &[Routes], pad: &Pad| {
+            (!copper.is_empty())
+                .then(|| {
+                    Rect::around(
+                        (copper.iter())
+                            .flat_map(|routes| {
+                                (routes.tracks.iter())
+                                    .flat_map(|t| t.path.iter().copied())
+                                    .chain(routes.vias.iter().map(|v| v.position))
+                            })
+                            .chain([pad.position]),
+                    )
+                })
+                .flatten()
+        };
+        Self {
+            joined: [from, to],
+            joined_boxes: [around(from, self.from), around(to, self.to)],
+            ..*self
         }
     }
 
@@ -258,6 +291,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         let (from_reach, to_reach) = (reach(self.from), reach(self.to));
         if from_reach.is_none()
             && to_reach.is_none()
+            && self.joined.iter().all(|copper| copper.is_empty())
             && let Some(direct) = self.direct_line()
         {
             return Ok(direct);
@@ -270,7 +304,9 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     }
 
     fn run_both_ways(self, from_reach: i64, scratch: &mut Scratch) -> Result<Vec<Step>, NoRoute> {
-        let (from_access, to_access) = (self.access(self.from), self.access(self.to));
+        let (mut from_access, mut to_access) = (self.access(self.from), self.access(self.to));
+        from_access.extend(self.ways_onto_copper(self.joined[0]));
+        to_access.extend(self.ways_onto_copper(self.joined[1]));
         if from_access.is_empty() || to_access.is_empty() {
             return Err(self.blocked(from_access.is_empty(), to_access.is_empty()));
         }
@@ -283,6 +319,8 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 from: self.to,
                 to: self.from,
                 to_reach: from_reach,
+                joined: [self.joined[1], self.joined[0]],
+                joined_boxes: [self.joined_boxes[1], self.joined_boxes[0]],
                 ..self
             };
             return backwards
@@ -828,6 +866,60 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         ways
     }
 
+    /// The ways that start or end right on `copper`: the nodes on its tracks
+    /// and under its vias, on each layer they lie on.
+    fn ways_onto_copper(&self, copper: &[Routes]) -> Vec<Way> {
+        let pitch = self.profile.grid_pitch;
+        let node_at = |point: Point| {
+            (point.x % pitch == 0 && point.y % pitch == 0)
+                .then(|| (point.x / pitch, point.y / pitch))
+        };
+        let way = |node: Node, layer: LayerId| Way {
+            state: State {
+                node,
+                layer: layer.0,
+                heading: UNSET,
+            },
+            cost: 0,
+            stub: Stub {
+                anchor: self.grid.point(node),
+                bend: None,
+            },
+        };
+        let mut ways = Vec::new();
+        for routes in copper {
+            for track in &routes.tracks {
+                for pair in track.path.windows(2) {
+                    let (Some(a), Some(b)) = (node_at(pair[0]), node_at(pair[1])) else {
+                        continue;
+                    };
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    if !(dx == 0 || dy == 0 || dx.abs() == dy.abs()) {
+                        continue;
+                    }
+                    let steps = dx.abs().max(dy.abs());
+                    ways.extend(
+                        (0..=steps)
+                            .map(|k| (a.0 + k * dx.signum(), a.1 + k * dy.signum()))
+                            .filter(|&node| self.grid.contains(node) && self.in_corridor(node))
+                            .map(|node| way(node, track.layer)),
+                    );
+                }
+            }
+            for via in &routes.vias {
+                let Some(node) = node_at(via.position).filter(|&n| self.grid.contains(n)) else {
+                    continue;
+                };
+                ways.extend(
+                    (self.design.via_kind(via.kind).copper.iter())
+                        .filter(|c| self.design.layers[c.layer.index()].routable)
+                        .map(|c| way(node, c.layer)),
+                );
+            }
+        }
+        ways
+    }
+
     fn ways_onto(&self, pad: &Pad) -> Vec<Way> {
         let mut ways = Vec::new();
         for copper in pad
@@ -924,6 +1016,15 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     /// distance; only the short any-angle stub into the pad can cost less.
     fn estimate(&self, state: State) -> i64 {
         let here = self.grid.point(state.node);
+        if let Some(target) = self.joined_boxes[1] {
+            // The way may end on any of the copper joined to the target, on
+            // any layer: the distance to the box around it all is the least.
+            let outside = |v: i32, min: i32, max: i32| i64::from((min - v).max(v - max).max(0));
+            let dx = outside(here.x, target.min.x, target.max.x);
+            let dy = outside(here.y, target.min.y, target.max.y);
+            let (long, short) = (dx.max(dy), dx.min(dy));
+            return long - short + short * self.diagonal / i64::from(self.profile.grid_pitch);
+        }
         let dx = i64::from(here.x.abs_diff(self.to.position.x));
         let dy = i64::from(here.y.abs_diff(self.to.position.y));
         let (long, short) = (dx.max(dy), dx.min(dy));

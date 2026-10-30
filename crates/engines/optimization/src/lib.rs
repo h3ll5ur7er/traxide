@@ -2,7 +2,7 @@
 //! changing what it connects (docs/Architecture/Routing-pipeline.md#optimise).
 
 use traxide_contracts::geometry::{Point, Segment};
-use traxide_contracts::{ConnectionId, LayoutAccess, Routes, Track};
+use traxide_contracts::{ConnectionId, LayoutAccess, Routes, Track, Via};
 
 /// Measured on the corpus, a second pass saves some 3 % of the corners the
 /// first one left, a third and fourth little more.
@@ -11,7 +11,8 @@ const MOST_PASSES: usize = 4;
 /// `routes` with each track pulled tight: runs of its corners are replaced
 /// by the shortest octilinear way between their ends wherever that fits in
 /// `layout`, which holds the board but none of `routes`. A track's ends stay
-/// where they are, and so do the vias, so everything stays joined as it was.
+/// where they are, and so do the vias and the points where another track of
+/// its net ends on it, so everything stays joined as it was.
 /// The tracks are taken in turn, each against the others as they are by then,
 /// and again while that changes any: a track moved may make room for one
 /// taken before it.
@@ -32,8 +33,10 @@ pub fn pull_tight(routes: &Routes, layout: &mut impl LayoutAccess) -> Routes {
     }
     for _ in 0..MOST_PASSES {
         let mut changed = false;
-        for (i, track) in tracks.iter_mut().enumerate() {
-            let tight = tightened(track, layout);
+        for i in 0..tracks.len() {
+            let joints = joints_on(&tracks, &vias.vias, i);
+            let track = &mut tracks[i];
+            let tight = tightened(track, &joints, layout);
             if tight != track.path {
                 layout.remove_route(id_of(i));
                 track.path = tight;
@@ -51,10 +54,66 @@ pub fn pull_tight(routes: &Routes, layout: &mut impl LayoutAccess) -> Routes {
     }
 }
 
+/// The points of track `i` where another track of its net ends, or a via of
+/// its net stands, other than its own ends: the net is joined there.
+fn joints_on(tracks: &[Track], vias: &[Via], i: usize) -> Vec<Point> {
+    let track = &tracks[i];
+    let ends = (tracks.iter().enumerate())
+        .filter(|&(k, other)| k != i && other.net == track.net && other.layer == track.layer)
+        .flat_map(|(_, other)| [other.path.first(), other.path.last()])
+        .flatten()
+        .copied();
+    let vias = (vias.iter())
+        .filter(|via| via.net == track.net)
+        .map(|via| via.position);
+    let (first, last) = (track.path.first(), track.path.last());
+    ends.chain(vias)
+        .filter(|at| Some(at) != first && Some(at) != last)
+        .filter(|&at| track.path.windows(2).any(|w| lies_on(w[0], w[1], at)))
+        .collect()
+}
+
+/// Whether `at` lies on the segment from `a` to `b`.
+fn lies_on(a: Point, b: Point, at: Point) -> bool {
+    let (ab, aat) = (b - a, at - a);
+    let cross = i64::from(ab.x) * i64::from(aat.y) - i64::from(ab.y) * i64::from(aat.x);
+    cross == 0
+        && (a.x.min(b.x)..=a.x.max(b.x)).contains(&at.x)
+        && (a.y.min(b.y)..=a.y.max(b.y)).contains(&at.y)
+}
+
+/// `path` with each of `joints` as a corner of its own, in the order the
+/// path passes them, and which corners they are.
+fn with_joints(path: &[Point], joints: &[Point]) -> (Vec<Point>, Vec<bool>) {
+    let mut points = vec![path[0]];
+    let mut fixed = vec![true];
+    for pair in path.windows(2) {
+        let mut on: Vec<Point> = (joints.iter().copied())
+            .filter(|&at| at != pair[0] && lies_on(pair[0], pair[1], at))
+            .collect();
+        on.sort_by_key(|at| pair[0].distance(*at));
+        on.dedup();
+        for at in on {
+            if at != pair[1] {
+                points.push(at);
+                fixed.push(true);
+            }
+        }
+        points.push(pair[1]);
+        fixed.push(joints.contains(&pair[1]));
+    }
+    if let Some(last) = fixed.last_mut() {
+        *last = true;
+    }
+    (points, fixed)
+}
+
 /// The track's path with each run of corners that a shorter or simpler
-/// octilinear way can replace replaced, the longest run first.
-fn tightened(track: &Track, layout: &impl LayoutAccess) -> Vec<Point> {
-    let path = &track.path;
+/// octilinear way can replace replaced, the longest run first; no run
+/// passes over one of `joints`.
+fn tightened(track: &Track, joints: &[Point], layout: &impl LayoutAccess) -> Vec<Point> {
+    let (path, fixed) = with_joints(&track.path, joints);
+    let path = &path;
     let fits = |way: &[Point]| {
         way.windows(2).all(|w| {
             layout.is_track_clear(
@@ -69,7 +128,10 @@ fn tightened(track: &Track, layout: &impl LayoutAccess) -> Vec<Point> {
     let mut i = 0;
     while i + 1 < path.len() {
         let after = |j: usize| path.get(j + 1).copied();
-        let shortcut = (i + 2..path.len()).rev().find_map(|j| {
+        let next_joint = (i + 1..path.len())
+            .find(|&k| fixed[k])
+            .unwrap_or(path.len() - 1);
+        let shortcut = (i + 2..=next_joint).rev().find_map(|j| {
             ways_between(path[i], path[j])
                 .into_iter()
                 .filter(|way| improves(way, &path[i..=j]))

@@ -1149,3 +1149,32 @@ fn a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out() {
     assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
     assert_legal(&design, &result.routes);
 }
+
+fn track_length(routes: &Routes) -> f64 {
+    routes
+        .tracks
+        .iter()
+        .flat_map(|t| t.path.windows(2))
+        .map(|w| f64::from(w[1].x - w[0].x).hypot(f64::from(w[1].y - w[0].y)))
+        .sum()
+}
+
+#[test]
+fn a_pad_beside_its_nets_track_joins_the_track_rather_than_the_far_pad() {
+    // P3 is planned to P1, but P1's track to P2 passes 5 mm below P3: the
+    // net grows as a tree, P3 dropping straight onto the track.
+    let design = DesignBuilder::new(20.0, 20.0)
+        .smd("P1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("P2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .smd("P3", Some("A"), at(10.0, 15.0), 1.0, 0)
+        .build();
+    let result = route(&design, &[("P1", "P2"), ("P3", "P1")]);
+    assert!(result.unrouted.is_empty());
+    let length = track_length(&result.routes);
+    assert!(
+        length < mm(21.5) as f64,
+        "{length} nm: {:?}",
+        result.routes.tracks
+    );
+    assert_legal(&design, &result.routes);
+}

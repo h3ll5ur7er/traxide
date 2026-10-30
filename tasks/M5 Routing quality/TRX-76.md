@@ -28,7 +28,8 @@ Also measured, and not the way: preferred layer directions as a cost (a step acr
 
 - [x] A failing test: two connections whose routes cross on one layer, one hopping over the other, end with the hop gone where moving the other connection makes room (`a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out`)
 - [x] After tidying, for each routed connection with more vias than it needs: search it again with vias as dear as tidying makes them, allowed to cross routed connections at a quarter of a via for each grid edge it overlaps them; take out what it crosses, route those again among the rest without crossing anything, and keep the change only if every one of them routes and the vias of all of them together fall (`Router::take_out_hops`). A second pass tries only the connections whose window meets copper that moved
-- [ ] TokenBoard: fewer new vias without losing a net, within the time limit; the corpus gate passes
+- [x] TokenBoard: fewer new vias without losing a net, within the time limit; the corpus gate passes (PR #30: no regression, 7 boards route more nets)
+- [x] Nets grow as trees: after the hops, each routed connection, shortest first, is searched again from any copper of its net already joined to its first pad to any joined to its second (by the other routed connections of the net), and takes the new way if it has fewer vias, or as many and is shorter. A connection another now ends on stays where it is from then on; pulling tight keeps the points where another track of the net ends on a track (`Router::grow_trees`, `Search::joining`)
 
 **Taking out hops, measured** (this machine, `--time-limit 90`; every board as complete as before, and no rule broken that main does not break):
 
@@ -45,3 +46,16 @@ Also measured, and not the way: preferred layer directions as a cost (a step acr
 On TokenBoard the first pass took 14 s and 66 vias out, the second 10 s and 16 more, a third would take 6 s for 2. Measured at a sixteenth of a via per edge, of the first pass's 156 connections with more vias than they need, 59 found no way with fewer vias even crossing others, 42 crossed connections that then found no room, 37 gained less than the others lost, 18 succeeded. The price of a crossing decides much: a sixteenth of a via per overlapped edge left 405 vias, a quarter 379, half a via 428, a whole via 431. Limiting how many connections one may cross saved little time (57 s even at one), as the time goes into the searches that may cross.
 
 What is left on TokenBoard's COL4 (26 vias, now 22; Freerouting 13): short hops beside each switch, where the column passes the switch's own row or diode copper, and a row run that steps around the switches' holes every key.
+
+**Nets grown as trees, measured** (after the hops; this machine, `--time-limit 90`; main before both):
+
+| Board | Vias on main | Hops taken out | **and trees** | Time on main | Now |
+| --- | --- | --- | --- | --- | --- |
+| TokenBoard's KiCad board | 446 | 363 | **335** | 34 s | 60 s |
+| Sofle (Issue178) | 518 | 471 | **449** | 7.1 s | 22.6 s |
+| Issue034-Green14SegLED | 150 | 134 | **125** | 32.1 s | 33.0 s |
+| Issue110-RelayModule | 64 | 54 | **53** | 6.1 s | 7.6 s |
+| Issue230-CNH | 92 | 88 | **87** | 6.8 s | 10.6 s |
+| Issue035-ReadPlaceScope | 86 | | **77** | 1.9 s | 4.2 s |
+
+Every board as complete as on main, with the same rules broken (the boards' own). TokenBoard's new copper: 10,061 mm of track in 2,494 segments (main 10,109 mm in 2,728; Freerouting 10,070 mm in 1,915). The trees' search ends anywhere in the box around the target pad and its joined copper, so its estimate is the distance to that box: towards the far pad, it ended on the first copper on the way rather than the nearest.
