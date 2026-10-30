@@ -7,7 +7,7 @@
 use traxide_contracts::geometry::{Point, Segment, Shape};
 use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Design, LayerShape, LayoutAccess, Pad, PadId, Plan,
-    Routes, Track,
+    Routes, Track, Via,
 };
 
 /// Parts with fewer pins are passives and small transistors, whose pads are
@@ -77,6 +77,7 @@ impl Escaped {
                 trimmed(
                     stub,
                     routes.tracks.iter().chain(&self.design.existing.tracks),
+                    routes.vias.iter().chain(&self.design.existing.vias),
                 )
             })
             .collect();
@@ -117,19 +118,25 @@ impl Escaped {
     }
 }
 
-/// `stub` up to the point of `tracks` on it farthest from its pin, as the pad
-/// at its end is all of its copper: a route may join it anywhere, or run
-/// along it from the pin and leave it at a bend, as may the board's wiring,
-/// and beyond that the stub would lead nowhere. Unchanged where no track
-/// touches it; none where they all touch it at the pin.
-fn trimmed<'t>(stub: &Track, tracks: impl Iterator<Item = &'t Track>) -> Option<Track> {
+/// `stub` up to the point of `tracks` or `vias` on it farthest from its pin,
+/// as the pad at its end is all of its copper: a route may join it anywhere,
+/// or run along it from the pin and leave it at a bend or a via, as may the
+/// board's wiring, and beyond that the stub would lead nowhere. Unchanged
+/// where nothing touches it; none where all touches it at the pin.
+fn trimmed<'t>(
+    stub: &Track,
+    tracks: impl Iterator<Item = &'t Track>,
+    vias: impl Iterator<Item = &'t Via>,
+) -> Option<Track> {
     let [pin, end] = [stub.path[0], stub.path[1]];
     let along = Segment::new(pin, end);
     let (dx, dy) = (f64::from(end.x - pin.x), f64::from(end.y - pin.y));
     let length_squared = dx * dx + dy * dy;
+    let vias = (vias.filter(|via| via.net == stub.net)).map(|via| (via.position, 0));
     let farthest = tracks
         .filter(|t| t.net == stub.net && t.layer == stub.layer)
         .flat_map(|t| t.path.iter().map(|&at| (at, t.width)))
+        .chain(vias)
         .filter(|&(at, width)| {
             along.is_point_closer_than(at, i64::from((stub.width + width) / 2) + 1)
         })
@@ -460,6 +467,45 @@ mod tests {
             .find(|t| t.net == n1)
             .expect("N1's stub");
         assert_eq!(stub.path, [pin, middle]);
+    }
+
+    #[test]
+    fn a_stub_reaches_a_via_of_its_net_at_its_end() {
+        // The route leaves the stub's end through a via, and another of the
+        // net joins it at the pin: the via is what the stub leads to.
+        let design = chip(8).layers(2).build();
+        let escaped = escaped(&design);
+        let n1 = design.net_named("N1");
+        let pin = design.pad(design.pad_named("U1-1")).position;
+        let start = start_of(&escaped, "N1").position;
+        let route = Routes {
+            tracks: vec![
+                Track {
+                    net: n1,
+                    layer: traxide_contracts::LayerId(0),
+                    width: mm(0.2),
+                    path: vec![Point::new(pin.x - mm(2.0), pin.y), pin],
+                },
+                Track {
+                    net: n1,
+                    layer: traxide_contracts::LayerId(1),
+                    width: mm(0.2),
+                    path: vec![start, Point::new(start.x, start.y - mm(3.0))],
+                },
+            ],
+            vias: vec![traxide_contracts::Via {
+                net: n1,
+                kind: traxide_contracts::ViaKindId::from_index(0),
+                position: start,
+            }],
+        };
+        let copper = escaped.copper_used(&[], &route);
+        let stub = copper
+            .tracks
+            .iter()
+            .find(|t| t.net == n1)
+            .expect("N1's stub");
+        assert_eq!(stub.path, [pin, start]);
     }
 
     #[test]

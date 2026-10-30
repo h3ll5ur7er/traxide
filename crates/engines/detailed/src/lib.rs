@@ -90,6 +90,7 @@ impl<'a> Router<'a> {
                 design,
                 rules,
                 profile,
+                directions: search::Directions::default(),
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
@@ -132,6 +133,11 @@ impl<'a> Router<'a> {
     /// completes more nets is kept (`Attempt::standing`): rounds route more on
     /// congested boards but lose a
     /// connection on some that rip-up completes, which never pay for them (TRX-56).
+    ///
+    /// Then the board is routed once more with each layer's tracks running
+    /// one way (`directions_of`), as the first routing mostly ran them, and
+    /// that routing is kept if it is as complete with fewer vias: running
+    /// layers crosswise leaves fewer hops to take out (TRX-77).
     pub fn route_plan(
         &mut self,
         plan: &Plan,
@@ -140,6 +146,42 @@ impl<'a> Router<'a> {
         cancel: &CancelToken,
         events: &impl Publisher<Event>,
     ) -> RoutingResult {
+        let first = self.route_attempt(plan, corridors, layout, cancel, events);
+        let share = self.finder.profile.against_layer_direction;
+        let directions = (share > 0.0)
+            .then(|| directions_of(self.finder.design, &first, share))
+            .flatten();
+        let Some(directions) = directions else {
+            return first.into_result(plan);
+        };
+        if cancel.is_cancelled() || self.is_past_deadline() {
+            return first.into_result(plan);
+        }
+        first.take_out(layout);
+        self.finder.directions = directions;
+        let second = self.route_attempt(plan, corridors, layout, cancel, events);
+        self.finder.directions = search::Directions::default();
+        let best = if second.is_better_than(&first, plan) {
+            second
+        } else {
+            second.take_out(layout);
+            first.put_back(layout);
+            first
+        };
+        best.into_result(plan)
+    }
+
+    /// Negotiates the board, a second time settled in rounds where that
+    /// leaves connections unrouted, and tidies what the better of the two
+    /// routed.
+    fn route_attempt(
+        &mut self,
+        plan: &Plan,
+        corridors: Option<&Corridors>,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+        events: &impl Publisher<Event>,
+    ) -> Attempt {
         let first = self.negotiate(self.fresh(plan), plan, corridors, layout, cancel, events);
         let mut best = if first.unrouted.is_empty()
             || self.finder.profile.max_rip_ups == 0
@@ -173,7 +215,7 @@ impl<'a> Router<'a> {
             self.continue_lanes(&mut best, plan, layout, cancel);
             self.grow_trees(&mut best, plan, layout, cancel);
         }
-        best.into_result(plan)
+        best
     }
 
     /// The vias a connection needs at least: one between pads that share no
@@ -857,6 +899,7 @@ struct Finder<'a> {
     design: &'a Design,
     rules: &'a ConstraintSet,
     profile: &'a Profile,
+    directions: search::Directions,
 }
 
 impl Finder<'_> {
@@ -930,7 +973,8 @@ impl Finder<'_> {
             layout,
             negotiation,
             corridor,
-        );
+        )
+        .with_directions(self.directions);
         let steps = search.run(scratch)?;
         Ok(self.routes(&steps, connection))
     }
@@ -955,7 +999,8 @@ impl Finder<'_> {
             layout,
             None,
             None,
-        );
+        )
+        .with_directions(self.directions);
         let steps = search.joining(from, to).run(scratch)?;
         Ok(self.routes(&steps, connection))
     }
@@ -974,7 +1019,8 @@ impl Finder<'_> {
             layout,
             None,
             None,
-        );
+        )
+        .with_directions(self.directions);
         let steps = search.by_lanes_only().run(scratch)?;
         Ok(self.routes(&steps, connection))
     }
@@ -1070,6 +1116,66 @@ fn reaches(routes: &Routes, at: Point) -> bool {
         || routes.vias.iter().any(|v| v.position == at)
 }
 
+/// A layer's direction is only worth running with where the first routing
+/// leant clearly one way: by this share of its track length, summed over the
+/// layers. TokenBoard, whose directions saved 43 vias of 335, leant by 0.08;
+/// Issue015 by none.
+const CLEAR_LEAN: f64 = 0.02;
+
+/// Which way the routable layers of `design` run, crosswise to each other in
+/// their stack, oriented as `attempt` ran its tracks; none where it leant
+/// neither way clearly, or a board has fewer than two layers to route on.
+/// A step across a layer's direction costs `share` of its length more.
+fn directions_of(design: &Design, attempt: &Attempt, share: f64) -> Option<search::Directions> {
+    let routable: Vec<usize> = (design.layers.iter().enumerate())
+        .filter(|(_, layer)| layer.routable)
+        .map(|(i, _)| i)
+        .collect();
+    if routable.len() < 2 || routable.iter().any(|&i| i >= 64) {
+        return None;
+    }
+    let mut runs = vec![(0_i64, 0_i64); design.layers.len()];
+    for track in attempt.routed.iter().flatten().flat_map(|r| &r.tracks) {
+        for w in track.path.windows(2) {
+            let run = &mut runs[track.layer.index()];
+            run.0 += i64::from((w[1].x - w[0].x).abs());
+            run.1 += i64::from((w[1].y - w[0].y).abs());
+        }
+    }
+    let horizontal_if = |first: usize| -> Vec<usize> {
+        (routable.iter().enumerate())
+            .filter(|(n, _)| (n + first).is_multiple_of(2))
+            .map(|(_, &layer)| layer)
+            .collect()
+    };
+    let along = |first: usize| -> i64 {
+        let horizontal = horizontal_if(first);
+        (routable.iter())
+            .map(|layer| {
+                let (x, y) = runs[*layer];
+                if horizontal.contains(layer) { x } else { y }
+            })
+            .sum()
+    };
+    let total: i64 = routable
+        .iter()
+        .map(|&layer| runs[layer].0 + runs[layer].1)
+        .sum();
+    let (first_horizontal, second_horizontal) = (along(0), along(1));
+    let lean = (first_horizontal - second_horizontal).abs() as f64 / total.max(1) as f64;
+    if lean < CLEAR_LEAN {
+        return None;
+    }
+    let first = usize::from(second_horizontal > first_horizontal);
+    Some(search::Directions {
+        against_per_mille: (share * 1000.0).round() as i64,
+        horizontal_layers: horizontal_if(first)
+            .iter()
+            .map(|&layer| 1_u64 << layer)
+            .sum(),
+    })
+}
+
 /// What one way of negotiating routed, and why the rest is not.
 struct Attempt {
     routed: Vec<Option<Routes>>,
@@ -1090,6 +1196,17 @@ impl Attempt {
             .collect();
         let routed = self.routed.iter().filter(|r| r.is_some()).count();
         (nets.len() - incomplete.len(), routed)
+    }
+
+    /// Whether it got further than `other`, or as far with fewer vias.
+    fn is_better_than(&self, other: &Self, plan: &Plan) -> bool {
+        let vias = |attempt: &Self| -> usize {
+            (attempt.routed.iter().flatten())
+                .map(|routes| routes.vias.len())
+                .sum()
+        };
+        let (mine, theirs) = (self.standing(plan), other.standing(plan));
+        mine > theirs || (mine == theirs && vias(self) < vias(other))
     }
 
     fn take_out(&self, layout: &mut impl LayoutAccess) {
@@ -1302,6 +1419,75 @@ mod tests {
     use traxide_layout_access::Layout;
     use traxide_rules::Purpose;
 
+    fn routed_on(design: &Design, runs: &[(usize, Point, Point)]) -> Attempt {
+        let net = design.net_named("A");
+        let routed = runs
+            .iter()
+            .map(|&(layer, a, b)| {
+                Some(Routes {
+                    tracks: vec![Track {
+                        net,
+                        layer: LayerId::from_index(layer),
+                        width: 200_000,
+                        path: vec![a, b],
+                    }],
+                    vias: Vec::new(),
+                })
+            })
+            .collect();
+        Attempt {
+            routed,
+            unrouted: Vec::new(),
+            hemmed_in: Vec::new(),
+            exits_taken: Vec::new(),
+            cut_off: Vec::new(),
+        }
+    }
+
+    fn two_layers() -> Design {
+        DesignBuilder::new(30.0, 30.0)
+            .layers(2)
+            .tht("A1", Some("A"), at(5.0, 5.0), 1.0)
+            .build()
+    }
+
+    #[test]
+    fn each_layer_runs_the_way_the_first_routing_mostly_ran_it() {
+        let design = two_layers();
+        let attempt = routed_on(
+            &design,
+            &[
+                (0, at(2.0, 2.0), at(12.0, 2.0)),
+                (0, at(2.0, 4.0), at(4.0, 6.0)),
+                (1, at(20.0, 2.0), at(20.0, 22.0)),
+                (1, at(22.0, 2.0), at(24.0, 2.0)),
+            ],
+        );
+        let directions = directions_of(&design, &attempt, 0.5).expect("a clear lean");
+        assert_eq!(
+            directions,
+            search::Directions {
+                against_per_mille: 500,
+                horizontal_layers: 0b01,
+            }
+        );
+    }
+
+    #[test]
+    fn layers_run_no_way_where_the_first_routing_leant_neither() {
+        let design = two_layers();
+        let attempt = routed_on(
+            &design,
+            &[
+                (0, at(2.0, 2.0), at(12.0, 2.0)),
+                (0, at(2.0, 4.0), at(2.0, 14.0)),
+                (1, at(20.0, 2.0), at(20.0, 12.0)),
+                (1, at(22.0, 2.0), at(12.0, 2.0)),
+            ],
+        );
+        assert_eq!(directions_of(&design, &attempt, 0.5), None);
+    }
+
     #[test]
     fn tidying_keeps_clear_of_a_route_that_runs_beyond_its_window() {
         // A runs over the wall's end at y 15 mm, far beyond its window, by two
@@ -1368,6 +1554,7 @@ mod tests {
             heuristic_weight: 1.0,
             global_routing: false,
             batch_size: 16,
+            against_layer_direction: 0.0,
         };
         let rules = traxide_rules::compile(
             &design,

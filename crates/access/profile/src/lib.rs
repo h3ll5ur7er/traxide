@@ -34,6 +34,11 @@ pub enum ProfileError {
         profile: String,
         field: &'static str,
     },
+    #[error("profile {profile}: {field} must be zero or more")]
+    Negative {
+        profile: String,
+        field: &'static str,
+    },
 }
 
 /// The profile called `name`. Profiles in `file` override fields of the built-in
@@ -83,6 +88,7 @@ struct Fields {
     heuristic_weight: Option<f64>,
     global_routing: Option<bool>,
     batch_size: Option<u32>,
+    against_layer_direction: Option<f64>,
 }
 
 impl Fields {
@@ -98,6 +104,9 @@ impl Fields {
             heuristic_weight: other.heuristic_weight.or(self.heuristic_weight),
             global_routing: other.global_routing.or(self.global_routing),
             batch_size: other.batch_size.or(self.batch_size),
+            against_layer_direction: other
+                .against_layer_direction
+                .or(self.against_layer_direction),
         }
     }
 
@@ -149,6 +158,16 @@ impl Fields {
                 }
                 size => size,
             },
+            // Zero is allowed: it turns layer directions off.
+            against_layer_direction: match self.against_layer_direction.unwrap_or(0.0) {
+                share if share >= 0.0 && share.is_finite() => share,
+                _ => {
+                    return Err(ProfileError::Negative {
+                        profile: name.into(),
+                        field: "against_layer_direction",
+                    });
+                }
+            },
         })
     }
 }
@@ -187,6 +206,21 @@ mod tests {
         assert!(matches!(
             load_profile("default", Some(&file)),
             Err(ProfileError::BelowOne { .. })
+        ));
+    }
+
+    #[test]
+    fn layer_directions_can_be_turned_off_but_not_made_negative() {
+        let off = file_with("[profiles.default]\nagainst_layer_direction = 0\n");
+        let profile = load_profile("default", Some(&off)).expect("valid");
+        assert_eq!(profile.against_layer_direction, 0.0);
+        let negative = file_with("[profiles.default]\nagainst_layer_direction = -0.5\n");
+        assert!(matches!(
+            load_profile("default", Some(&negative)),
+            Err(ProfileError::Negative {
+                field: "against_layer_direction",
+                ..
+            })
         ));
     }
 
