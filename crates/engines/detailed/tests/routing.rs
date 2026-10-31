@@ -406,6 +406,28 @@ fn a_board_routed_three_ways_stays_complete_and_legal() {
 }
 
 #[test]
+fn the_routing_kept_completes_as_much_as_routing_once_with_no_more_vias() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let once = route_with(&design, &profile(), &pairs);
+    let directed = Profile {
+        against_layer_direction: 0.5,
+        ..profile()
+    };
+    let kept = route_with(&design, &directed, &pairs);
+    assert!(kept.unrouted.len() <= once.unrouted.len());
+    assert!(
+        kept.routes.vias.len() <= once.routes.vias.len(),
+        "{} vias, routed once {}",
+        kept.routes.vias.len(),
+        once.routes.vias.len()
+    );
+}
+
+#[test]
 fn the_routes_do_not_depend_on_the_number_of_threads() {
     let (design, pairs) = scattered_nets();
     let pairs: Vec<(&str, &str)> = pairs

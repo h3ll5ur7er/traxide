@@ -52,6 +52,23 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Routed again with dearer vias (M5, TRX-80)
+
+The price of a via moves the routing most, and no price suits every board: at 4 mm instead of 2 mm for all routings, TokenBoard routed with 275 vias instead of 314 and 8088sbc with 73 instead of 93, but LogicBoard completed 315 of 343 nets within 90 s instead of 333, and Issue066 224 of 266 instead of 231 ([[TRX-80]]). So where time is left after the three routings of [[TRX-79]], the board is routed the three ways again with vias twice as dear, and the better of all six stays. This machine, `--time-limit 90`, against main; every board as complete or more:
+
+| Board | Vias before | **Now** | Time before | Now |
+| --- | --- | --- | --- | --- |
+| Issue230-CNH | 84 | **66** | 25 s | 65 s |
+| Issue217-8088sbc | 93 | **73** | 17 s | 41 s |
+| Issue022-AutoRouter_interrupted | 113 | **97** | 56 s | 86 s |
+| Issue015-StackOverflow | 74 | **63** | 24 s | 67 s |
+| keyboard-tkl | 65 | **62** | 17 s | 44 s |
+| DAC2020_bm04 | 44 | **41** | 11 s | 25 s |
+| Sofle, Issue034, RelayModule, ReadPlaceScope | 401, 110, 49, 48 | the same | 23, 38, 19, 4 s | 70, 79, 49, 14 s |
+| TokenBoard's KiCad board | 314 | 314 (the second round cut short) | 62 s | 97 s |
+
+Without a limit TokenBoard routes with **275** vias in 156 s, at most 1,028 MB of memory (Freerouting: 199 vias in some 25 minutes). The boards that reach the limit route as before, their second round cut short: LogicBoard 333 of 343 nets, Issue066 228 of 266, smoothieboard 239 of 245, VGA 107 of 242, Mars-64 75 and 76 of 94, all within how far a board that reaches the limit moves from run to run.
+
 ## The ways layers may run, routed side by side (M5, TRX-79)
 
 Routing the board, orienting the layers as it leant and routing it again ([[TRX-77]]) doubled the time, and where the first routing reached the time limit the second never started. Routing uses one core of four, so the board is now routed three ways side by side, each in a copy of the layout on its share of the threads: without directions, and with the layers crosswise in either orientation; the first of those that complete most with fewest vias stays. This machine, 4 cores, `--time-limit 90`, against main with [[TRX-78]]; every board as complete, with the same rules broken (the boards' own):
