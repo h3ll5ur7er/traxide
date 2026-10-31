@@ -23,7 +23,7 @@ use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Corridors, Design, Event, LayoutAccess, NetId,
     Obstruction, PadId, Plan, Profile, Routes, RoutingResult,
 };
-use traxide_events::{CancelToken, Publisher};
+use traxide_events::{CancelToken, Publisher, Silent};
 
 /// How many connections a batch looks through for each connection it may hold.
 const SCANNED_PER_BATCH_SLOT: usize = 4;
@@ -134,41 +134,93 @@ impl<'a> Router<'a> {
     /// congested boards but lose a
     /// connection on some that rip-up completes, which never pay for them (TRX-56).
     ///
-    /// Then the board is routed once more with each layer's tracks running
-    /// one way (`directions_of`), as the first routing mostly ran them, and
-    /// that routing is kept if it is as complete with fewer vias: running
-    /// layers crosswise leaves fewer hops to take out (TRX-77).
-    pub fn route_plan(
+    /// The board is routed so three ways side by side, each in a layout of its
+    /// own: as is, and with each layer's tracks running one way, crosswise to
+    /// the next, in either orientation (`ways_to_run_layers`). The routing that
+    /// completes more, or as much with fewer vias, stays, the first of equals:
+    /// running layers crosswise leaves fewer hops to take out where it suits
+    /// the board, and only routing tells which way does (TRX-77, TRX-79).
+    /// Each routing searches on its share of the threads.
+    pub fn route_plan<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         plan: &Plan,
         corridors: Option<&Corridors>,
-        layout: &mut (impl LayoutAccess + Sync),
+        layout: &mut L,
         cancel: &CancelToken,
         events: &impl Publisher<Event>,
     ) -> RoutingResult {
-        let first = self.route_attempt(plan, corridors, layout, cancel, events);
-        let share = self.finder.profile.against_layer_direction;
-        let directions = (share > 0.0)
-            .then(|| directions_of(self.finder.design, &first, share))
-            .flatten();
-        let Some(directions) = directions else {
-            return first.into_result(plan);
-        };
-        if cancel.is_cancelled() || self.is_past_deadline() {
-            return first.into_result(plan);
+        let ways = self.ways_to_run_layers();
+        if ways.is_empty() {
+            return self
+                .route_attempt(plan, corridors, layout, cancel, events)
+                .into_result(plan);
         }
-        first.take_out(layout);
-        self.finder.directions = directions;
-        let second = self.route_attempt(plan, corridors, layout, cancel, events);
-        self.finder.directions = search::Directions::default();
-        let best = if second.is_better_than(&first, plan) {
-            second
-        } else {
-            second.take_out(layout);
-            first.put_back(layout);
-            first
-        };
+        let threads = (self.scratches.len() / (ways.len() + 1)).max(1);
+        let others: Vec<(Router<'a>, L)> = (ways.iter())
+            .map(|&directions| (self.alike(directions, threads), layout.clone()))
+            .collect();
+        self.scratches.truncate(threads);
+        let (first, others) = std::thread::scope(|scope| {
+            let running: Vec<_> = (others.into_iter())
+                .map(|(mut router, mut layout)| {
+                    scope.spawn(move || {
+                        let attempt =
+                            router.route_attempt(plan, corridors, &mut layout, cancel, &Silent);
+                        (attempt, layout)
+                    })
+                })
+                .collect();
+            let first = self.route_attempt(plan, corridors, layout, cancel, events);
+            let others: Vec<(Attempt, L)> = (running.into_iter())
+                .map(|routing| routing.join().expect("a routing of the board panicked"))
+                .collect();
+            (first, others)
+        });
+        let mut best = first;
+        for (attempt, routed_layout) in others {
+            if attempt.is_better_than(&best, plan) {
+                best = attempt;
+                *layout = routed_layout;
+            }
+        }
         best.into_result(plan)
+    }
+
+    /// The ways each layer's tracks may run besides any way, crosswise to the
+    /// next routable layer: none where the profile asks no direction, or the
+    /// board has fewer than two layers to route on.
+    fn ways_to_run_layers(&self) -> Vec<search::Directions> {
+        let share = self.finder.profile.against_layer_direction;
+        let routable: Vec<usize> = (self.finder.design.layers.iter().enumerate())
+            .filter(|(_, layer)| layer.routable)
+            .map(|(i, _)| i)
+            .collect();
+        if share <= 0.0 || routable.len() < 2 || routable.iter().any(|&i| i >= 64) {
+            return Vec::new();
+        }
+        [0, 1]
+            .map(|first| search::Directions {
+                against_per_mille: (share * 1000.0).round() as i64,
+                horizontal_layers: (routable.iter().enumerate())
+                    .filter(|(n, _)| (n + first).is_multiple_of(2))
+                    .map(|(_, &layer)| 1_u64 << layer)
+                    .sum(),
+            })
+            .to_vec()
+    }
+
+    /// A router like this one, its layers running the way `directions` says,
+    /// searching on `threads` threads.
+    fn alike(&self, directions: search::Directions, threads: usize) -> Router<'a> {
+        Router {
+            finder: Finder {
+                directions,
+                ..self.finder
+            },
+            scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
+            deadline: self.deadline,
+            cut_off: self.cut_off.clone(),
+        }
     }
 
     /// Negotiates the board, a second time settled in rounds where that
@@ -1116,66 +1168,6 @@ fn reaches(routes: &Routes, at: Point) -> bool {
         || routes.vias.iter().any(|v| v.position == at)
 }
 
-/// A layer's direction is only worth running with where the first routing
-/// leant clearly one way: by this share of its track length, summed over the
-/// layers. TokenBoard, whose directions saved 43 vias of 335, leant by 0.08;
-/// Issue015 by none.
-const CLEAR_LEAN: f64 = 0.02;
-
-/// Which way the routable layers of `design` run, crosswise to each other in
-/// their stack, oriented as `attempt` ran its tracks; none where it leant
-/// neither way clearly, or a board has fewer than two layers to route on.
-/// A step across a layer's direction costs `share` of its length more.
-fn directions_of(design: &Design, attempt: &Attempt, share: f64) -> Option<search::Directions> {
-    let routable: Vec<usize> = (design.layers.iter().enumerate())
-        .filter(|(_, layer)| layer.routable)
-        .map(|(i, _)| i)
-        .collect();
-    if routable.len() < 2 || routable.iter().any(|&i| i >= 64) {
-        return None;
-    }
-    let mut runs = vec![(0_i64, 0_i64); design.layers.len()];
-    for track in attempt.routed.iter().flatten().flat_map(|r| &r.tracks) {
-        for w in track.path.windows(2) {
-            let run = &mut runs[track.layer.index()];
-            run.0 += i64::from((w[1].x - w[0].x).abs());
-            run.1 += i64::from((w[1].y - w[0].y).abs());
-        }
-    }
-    let horizontal_if = |first: usize| -> Vec<usize> {
-        (routable.iter().enumerate())
-            .filter(|(n, _)| (n + first).is_multiple_of(2))
-            .map(|(_, &layer)| layer)
-            .collect()
-    };
-    let along = |first: usize| -> i64 {
-        let horizontal = horizontal_if(first);
-        (routable.iter())
-            .map(|layer| {
-                let (x, y) = runs[*layer];
-                if horizontal.contains(layer) { x } else { y }
-            })
-            .sum()
-    };
-    let total: i64 = routable
-        .iter()
-        .map(|&layer| runs[layer].0 + runs[layer].1)
-        .sum();
-    let (first_horizontal, second_horizontal) = (along(0), along(1));
-    let lean = (first_horizontal - second_horizontal).abs() as f64 / total.max(1) as f64;
-    if lean < CLEAR_LEAN {
-        return None;
-    }
-    let first = usize::from(second_horizontal > first_horizontal);
-    Some(search::Directions {
-        against_per_mille: (share * 1000.0).round() as i64,
-        horizontal_layers: horizontal_if(first)
-            .iter()
-            .map(|&layer| 1_u64 << layer)
-            .sum(),
-    })
-}
-
 /// What one way of negotiating routed, and why the rest is not.
 struct Attempt {
     routed: Vec<Option<Routes>>,
@@ -1419,73 +1411,51 @@ mod tests {
     use traxide_layout_access::Layout;
     use traxide_rules::Purpose;
 
-    fn routed_on(design: &Design, runs: &[(usize, Point, Point)]) -> Attempt {
-        let net = design.net_named("A");
-        let routed = runs
-            .iter()
-            .map(|&(layer, a, b)| {
-                Some(Routes {
-                    tracks: vec![Track {
-                        net,
-                        layer: LayerId::from_index(layer),
-                        width: 200_000,
-                        path: vec![a, b],
-                    }],
-                    vias: Vec::new(),
-                })
-            })
-            .collect();
-        Attempt {
-            routed,
-            unrouted: Vec::new(),
-            hemmed_in: Vec::new(),
-            exits_taken: Vec::new(),
-            cut_off: Vec::new(),
-        }
-    }
-
-    fn two_layers() -> Design {
-        DesignBuilder::new(30.0, 30.0)
-            .layers(2)
-            .tht("A1", Some("A"), at(5.0, 5.0), 1.0)
-            .build()
-    }
-
-    #[test]
-    fn each_layer_runs_the_way_the_first_routing_mostly_ran_it() {
-        let design = two_layers();
-        let attempt = routed_on(
-            &design,
-            &[
-                (0, at(2.0, 2.0), at(12.0, 2.0)),
-                (0, at(2.0, 4.0), at(4.0, 6.0)),
-                (1, at(20.0, 2.0), at(20.0, 22.0)),
-                (1, at(22.0, 2.0), at(24.0, 2.0)),
-            ],
+    fn ways_to_run_layers_of(design: &Design, against_layer_direction: f64) -> Vec<u64> {
+        let rules = traxide_rules::compile(
+            design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
         );
-        let directions = directions_of(&design, &attempt, 0.5).expect("a clear lean");
-        assert_eq!(
-            directions,
-            search::Directions {
-                against_per_mille: 500,
-                horizontal_layers: 0b01,
-            }
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 10,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction,
+        };
+        let ways = Router::new(design, &rules, &profile).ways_to_run_layers();
+        assert!(
+            ways.iter()
+                .all(|way| way.against_per_mille
+                    == (against_layer_direction * 1000.0).round() as i64)
         );
+        ways.iter().map(|way| way.horizontal_layers).collect()
     }
 
     #[test]
-    fn layers_run_no_way_where_the_first_routing_leant_neither() {
-        let design = two_layers();
-        let attempt = routed_on(
-            &design,
-            &[
-                (0, at(2.0, 2.0), at(12.0, 2.0)),
-                (0, at(2.0, 4.0), at(2.0, 14.0)),
-                (1, at(20.0, 2.0), at(20.0, 12.0)),
-                (1, at(22.0, 2.0), at(12.0, 2.0)),
-            ],
-        );
-        assert_eq!(directions_of(&design, &attempt, 0.5), None);
+    fn layers_run_crosswise_through_the_stack_either_way() {
+        let design = DesignBuilder::new(30.0, 30.0)
+            .layers(4)
+            .plane_layer(1)
+            .build();
+        assert_eq!(ways_to_run_layers_of(&design, 0.5), [0b1001, 0b0100]);
+    }
+
+    #[test]
+    fn layers_run_no_way_on_a_board_with_one_layer_to_route_on_or_without_a_price() {
+        let one = DesignBuilder::new(30.0, 30.0).layers(1).build();
+        assert!(ways_to_run_layers_of(&one, 0.5).is_empty());
+        let two = DesignBuilder::new(30.0, 30.0).layers(2).build();
+        assert!(ways_to_run_layers_of(&two, 0.0).is_empty());
     }
 
     #[test]

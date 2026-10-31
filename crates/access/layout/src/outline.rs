@@ -6,7 +6,7 @@ use traxide_contracts::geometry::{Rect, Region, Segment, Shape};
 /// looks only at the edges near it. Boards with rounded corners have outlines
 /// of hundreds of edges, and testing them all made every check of every
 /// search slow.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Outline {
     region: Region,
     bounds: Rect,

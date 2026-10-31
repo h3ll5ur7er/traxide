@@ -83,8 +83,8 @@ pub(crate) fn join_layers_of_the_same_item(pieces: &[Piece], joined: &mut Unions
 
 /// A plane joins the copper of its net that lies on one piece of its fill,
 /// poured around other nets' copper as the board's program pours it; no
-/// plane fills where one of another net overlaps it, as only their order of
-/// priority tells which does. Only on a layer that takes no tracks: elsewhere
+/// plane fills where one of another net of at least its priority overlaps
+/// it, as only the board's program tells which of two of one priority does. Only on a layer that takes no tracks: elsewhere
 /// routes of other nets may cut a pour apart, and only refilling it tells where.
 pub(crate) fn join_through_planes(
     design: &Design,

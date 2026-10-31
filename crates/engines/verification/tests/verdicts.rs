@@ -268,8 +268,8 @@ fn copper_outside_the_plane_is_not_joined_by_it() {
 
 #[test]
 fn a_plane_joins_nothing_where_a_plane_of_another_net_overlaps_it() {
-    // Which of two overlapping pours fills the overlap is the board program's
-    // choice: their order of priority, which the design does not know.
+    // Of two overlapping pours of the same priority, which fills the overlap
+    // is the board program's choice.
     let design = board_with_a_plane()
         .plane("VCC", 1, at(6.0, 0.0), at(10.0, 4.0))
         .tht("J1", Some("GND"), at(8.0, 2.0), 1.6)
@@ -286,6 +286,26 @@ fn a_plane_joins_nothing_where_a_plane_of_another_net_overlaps_it() {
             pads: vec![design.pad_named("J1")]
         }]
     );
+}
+
+#[test]
+fn a_plane_fills_where_a_plane_of_another_net_of_lower_priority_overlaps_it() {
+    // The board program pours the plane of higher priority first, and the
+    // other around it.
+    let design = DesignBuilder::new(20.0, 10.0)
+        .layers(3)
+        .plane_layer(1)
+        .plane("VCC", 1, at(0.0, 0.0), at(20.0, 10.0))
+        .plane_of_priority("GND", 1, at(0.0, 0.0), at(10.0, 10.0), 1)
+        .smd("G1", Some("GND"), at(2.0, 5.0), 1.0, 0)
+        .tht("J1", Some("GND"), at(8.0, 2.0), 1.6)
+        .tht("V1", Some("VCC"), at(18.0, 8.0), 1.6)
+        .build();
+    let routes = Routes {
+        tracks: vec![track(&design, "GND", 0, &[at(2.0, 5.0), at(3.0, 5.0)])],
+        vias: vec![via(&design, "GND", at(3.0, 5.0))],
+    };
+    assert_eq!(check(&design, routes), Verdict::default());
 }
 
 #[test]

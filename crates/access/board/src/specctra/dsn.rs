@@ -322,6 +322,7 @@ impl<'a> DsnReader<'a> {
                     holes: holes.clone(),
                     clearance: 0,
                     min_width: 0,
+                    priority: 0,
                 }));
             }
         }

@@ -149,7 +149,20 @@ impl DesignBuilder {
     }
 
     /// A pour of `net` filling the rectangle from `min` to `max` on `layer`.
-    pub fn plane(mut self, net: &str, layer: usize, min: Point, max: Point) -> Self {
+    pub fn plane(self, net: &str, layer: usize, min: Point, max: Point) -> Self {
+        self.plane_of_priority(net, layer, min, max, 0)
+    }
+
+    /// A pour of `net` filling the rectangle from `min` to `max` on `layer`,
+    /// before the pours of other nets of lower `priority`.
+    pub fn plane_of_priority(
+        mut self,
+        net: &str,
+        layer: usize,
+        min: Point,
+        max: Point,
+        priority: u32,
+    ) -> Self {
         let net = self.net_named(net);
         self.design.planes.push(Plane {
             net,
@@ -158,6 +171,7 @@ impl DesignBuilder {
             holes: Vec::new(),
             clearance: 0,
             min_width: 0,
+            priority,
         });
         self
     }

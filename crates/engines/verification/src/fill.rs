@@ -50,7 +50,7 @@ impl Fill {
             fill.scan(hole, |cell| on_the_board[cell] = false);
         }
         for other in design.planes.iter() {
-            if other.layer == plane.layer && other.net != plane.net {
+            if plane.gives_way_to(other) {
                 fill.scan(&other.outline, |cell| open[cell] = false);
             }
         }
@@ -81,7 +81,7 @@ impl Fill {
             }
         }
         for other in &design.planes {
-            if other.layer == plane.layer && other.net != plane.net {
+            if plane.gives_way_to(other) {
                 let clearance = (plane.clearance.max(other.clearance))
                     .max(rules.clearance(Some(plane.net), Some(other.net)));
                 for segment in other.outline.edges() {

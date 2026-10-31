@@ -52,7 +52,7 @@ enum Wanted {
 }
 
 /// The copper and keepouts of a design, and the routes added so far.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Layout<'a> {
     design: &'a Design,
     rules: &'a ConstraintSet,

@@ -16,16 +16,15 @@ pub(crate) fn pads_on_planes(design: &Design) -> Vec<bool> {
 }
 
 /// Whether copper of a plane's net shaped `shape` on the plane's layer joins
-/// it: where it lies on the plane, and no plane of another net overlaps it,
-/// as only their order of priority tells which fills there. Only on a layer
-/// that takes no tracks: elsewhere routes of other nets may cut a pour apart.
+/// it: where it lies on the plane, and no plane of another net that it gives
+/// way to overlaps it. Only on a layer that takes no tracks: elsewhere routes
+/// of other nets may cut a pour apart.
 pub(crate) fn joins_plane(design: &Design, plane: &Plane, shape: &Shape) -> bool {
     !design.layers[plane.layer.index()].routable
         && shape.is_inside(&plane.outline, 0)
         && !(plane.holes.iter()).any(|hole| Shape::Polygon(hole.clone()).is_closer_than(shape, 0))
         && !design.planes.iter().any(|other| {
-            other.layer == plane.layer
-                && other.net != plane.net
+            plane.gives_way_to(other)
                 && Shape::Polygon(other.outline.clone()).is_closer_than(shape, 0)
         })
 }

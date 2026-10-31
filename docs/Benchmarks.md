@@ -52,6 +52,29 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## The ways layers may run, routed side by side (M5, TRX-79)
+
+Routing the board, orienting the layers as it leant and routing it again ([[TRX-77]]) doubled the time, and where the first routing reached the time limit the second never started. Routing uses one core of four, so the board is now routed three ways side by side, each in a copy of the layout on its share of the threads: without directions, and with the layers crosswise in either orientation; the first of those that complete most with fewest vias stays. This machine, 4 cores, `--time-limit 90`, against main with [[TRX-78]]; every board as complete, with the same rules broken (the boards' own):
+
+| Board | Vias before | **Now** | Time before | Now |
+| --- | --- | --- | --- | --- |
+| TokenBoard's KiCad board | 356 (the second routing cut short) | **314** | 92 s | **62 s** |
+| Sofle (Issue178) | 439 | **401** | 35.5 s | **22.9 s** |
+| Issue034-Green14SegLED | 121 | **110** | 68.8 s | **38.3 s** |
+| keyboard-tkl | 72 | **65** | 22.3 s | **17.3 s** |
+| Issue110-RelayModule | 49 | 49 | 24.4 s | 18.5 s |
+| Issue230-CNH | 84 | 84 | 25.4 s | 17.5 s |
+| Issue035-ReadPlaceScope | 48 | 48 | 6.4 s | 4.3 s |
+| Issue015-StackOverflow | 74 | 74 | 18.1 s | 24.2 s (leant neither way, so routed once before) |
+
+Sofle, Issue034 and the keyboard route best with the orientation the first routing did not lean to. On boards that reach the limit, the directed routings now run too: within 40 s smoothieboard (Issue145) routes 575 of 582 connections instead of 567, Mars-64 (Issue102) 86 of 106 instead of 84. Memory grows with the copies: 687 MB at most on TokenBoard instead of 415, 237 and 261 MB on smoothieboard and Mars-64 instead of 166 and 114.
+
+## Zones of higher priority poured first (M5, TRX-78)
+
+TokenBoard's In2.Cu holds a +3V3 zone of priority 2 inside a VLED zone of priority 0, which KiCad pours around it. traxide read no priorities and let neither fill where they overlap, so it saw none of the author's +3V3 vias on their plane: planning routed 27 connections for the net with 9 vias, and `traxide check` counted Freerouting's routing 240 of 241 nets complete. A plane now gives way only to another net's plane of at least its priority. +3V3 needs 2 connections and 1 via, as in Freerouting's routing, which `traxide check` now counts complete (241 of 241 nets, no pad unconnected).
+
+The board as a whole routes no better: without a limit 313 vias instead of 292, in 108 s instead of 92 s. That is within how far the routing moves on small changes: main routes TokenBoard with 304 vias with a via cost of 1.99 instead of 2.0, and 292 with 2.01.
+
 ## Copper listed only where it reaches (M2, TRX-48)
 
 The layout's spatial index, 1 mm cells per layer, listed each obstacle in every cell of its bounding box. A diagonal track's box is a square, and a keepout's box can be far larger than the keepout: in those cells every query found the obstacle, passed the bounding-box test and checked it exactly. Each obstacle is now listed only in the cells it reaches (the cell's square against the shape, with the keepout's clearance; the outermost cells stand for everything beyond the board, as before). Same sessions to the byte; this machine, 4 cores:
