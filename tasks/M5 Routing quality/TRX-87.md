@@ -26,5 +26,5 @@ Measured with `--profile fast` on TokenBoard and ten corpus boards together (via
 
 - [x] Crossing an eighth of a via per edge (`CROSSING_EDGES_PER_VIA`), and three passes (`MOST_HOP_PASSES`): 12 % fewer vias in 41 % more time; TokenBoard 332 instead of 335, Issue034 98 instead of 117, Issue015 49 instead of 70, RelayModule 42 instead of 53, CNH 67 instead of 87
 - [x] A fourth pass: with `--profile fast` TokenBoard 318 vias instead of 332, the ten 975 instead of 979, in 8 % more time; a fifth takes out none more on TokenBoard
-- [x] TokenBoard with the default profile, without a limit: 256 vias instead of 261, in 579 s instead of 476 s, no rule broken
+- [x] TokenBoard with the default profile, without a limit: 256 vias instead of 261 with three passes, in 579 s instead of 476 s; 253 with four; no rule broken
 - [ ] The corpus gate passes
