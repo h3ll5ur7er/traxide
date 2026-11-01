@@ -23,6 +23,7 @@ fn profile() -> Profile {
         global_routing: false,
         batch_size: 1,
         against_layer_direction: 0.0,
+        rounds: 2,
     }
 }
 
@@ -449,6 +450,28 @@ fn the_routing_kept_completes_as_much_as_routing_once_with_no_more_vias() {
         kept.routes.vias.len(),
         once.routes.vias.len()
     );
+}
+
+#[test]
+fn more_rounds_route_as_much_with_no_more_vias() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let in_rounds = |rounds| {
+        let profile = Profile {
+            against_layer_direction: 0.5,
+            rounds,
+            ..profile()
+        };
+        route_with(&design, &profile, &pairs)
+    };
+    let (one, two, six) = (in_rounds(1), in_rounds(2), in_rounds(6));
+    assert!(one.unrouted.is_empty() && two.unrouted.is_empty() && six.unrouted.is_empty());
+    assert!(two.routes.vias.len() <= one.routes.vias.len());
+    assert!(six.routes.vias.len() <= two.routes.vias.len());
+    assert_legal(&design, &six.routes);
 }
 
 #[test]

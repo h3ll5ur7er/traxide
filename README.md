@@ -16,6 +16,8 @@ target/release/traxide route board.kicad_pcb
 target/release/traxide route board.dsn        # writes board.ses, on all cores
 target/release/traxide route --help           # profiles, threads, output
 target/release/traxide route board.dsn --time-limit 60   # stop negotiating after a minute
+target/release/traxide route board.dsn --profile fast       # routed once: a quick first look
+target/release/traxide route board.dsn --profile thorough   # more rounds: fewer vias, about three times as long
 target/release/traxide route board.kicad_pcb --reroute-existing   # route the board's unlocked tracks again too
 target/release/traxide route board.kicad_pcb --net USB_D_P --net USB_D_N   # route only these nets
 target/release/traxide check board.dsn board.ses   # complete? rules broken?

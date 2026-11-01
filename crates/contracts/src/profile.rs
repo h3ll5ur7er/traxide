@@ -39,4 +39,10 @@ pub struct Profile {
     /// orientation, and again with dearer vias where time is left; the routing
     /// with fewer vias stays. Zero routes once, with no directions.
     pub against_layer_direction: f64,
+    /// How many rounds of routings side by side are made where time is left,
+    /// the best of all staying: the first at this profile's prices, the
+    /// second with vias dearer, the further ones with layer directions
+    /// dearer or cheaper, as no one price suits every board. Without layer
+    /// directions, one routing is all.
+    pub rounds: u32,
 }

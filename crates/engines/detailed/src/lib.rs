@@ -58,11 +58,23 @@ const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
 /// cheaply, more tracks have to move, and fewer of them find room again.
 const CROSSING_EDGES_PER_VIA: i64 = 4;
 
-/// How many times dearer vias are when the board is routed again: dearer
-/// throughout, TokenBoard routed with 275 vias instead of 314, 8088sbc 73
-/// instead of 93, CNH 66 instead of 84, but LogicBoard completed 18 nets
-/// fewer within 90 s; which price suits a board only routing tells.
-const DEARER_VIAS: i64 = 2;
+/// The rounds after the first: their prices, as factors of the profile's
+/// price of a via and of running across a layer's direction, and whether
+/// they route the board as is too, which only the price of a via moves.
+/// Vias twice as
+/// dear throughout routed TokenBoard with 275 vias instead of 314, 8088sbc
+/// with 73 instead of 93, CNH with 66 instead of 84, but LogicBoard with
+/// 18 nets fewer within 90 s (TRX-80); layer directions half as dear again
+/// or a third cheaper, Sofle with 364 or 385 vias instead of 386, CNH with
+/// 45 or 63 instead of 64, TokenBoard with 291 instead of 267 (TRX-84):
+/// which prices suit a board only routing tells.
+const LATER_ROUNDS: [(i64, f64, bool); 5] = [
+    (2, 1.0, true),
+    (1, 1.5, false),
+    (2, 1.5, false),
+    (1, 0.7, false),
+    (2, 0.7, false),
+];
 
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
 /// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
@@ -143,11 +155,12 @@ impl<'a> Router<'a> {
     /// The board is routed so three ways side by side (`route_side_by_side`):
     /// as is, and with each layer's tracks running one way, crosswise to the
     /// next, in either orientation (`ways_to_run_layers`). Where time is left,
-    /// the three routings are made again with vias DEARER_VIAS times dearer.
-    /// The routing that completes more, or as much with fewer vias, stays,
-    /// the first of equals: running layers crosswise leaves fewer hops to
-    /// take out where it suits the board, and only routing tells which way,
-    /// and which price of a via, does (TRX-77, TRX-79, TRX-80).
+    /// it is routed again in the profile's further rounds, at the prices of
+    /// LATER_ROUNDS. The
+    /// routing that completes more, or as much with fewer vias, stays, the
+    /// first of equals: running layers crosswise leaves fewer hops to take
+    /// out where it suits the board, and only routing tells which way, and
+    /// which prices, do (TRX-77, TRX-79, TRX-80, TRX-84).
     pub fn route_plan<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         plan: &Plan,
@@ -163,27 +176,41 @@ impl<'a> Router<'a> {
                 .into_result(plan);
         }
         let threads = self.scratches.len();
-        let mut again = layout.clone();
-        let mut best = self.route_side_by_side(&ways, plan, corridors, layout, cancel, events);
-        if !cancel.is_cancelled() && !self.is_past_deadline() {
-            let dearer = Profile {
-                via_cost: self.finder.profile.via_cost * DEARER_VIAS,
+        let unrouted = layout.clone();
+        let all_ways: Vec<search::Directions> = std::iter::once(search::Directions::default())
+            .chain(ways)
+            .collect();
+        let mut best = self.route_side_by_side(&all_ways, plan, corridors, layout, cancel, events);
+        let rounds = self.finder.profile.rounds as usize;
+        let later = LATER_ROUNDS.iter().take(rounds.saturating_sub(1));
+        for &(dearer_vias, layers, as_is) in later {
+            if cancel.is_cancelled() || self.is_past_deadline() {
+                break;
+            }
+            let priced = Profile {
+                via_cost: self.finder.profile.via_cost * dearer_vias,
+                against_layer_direction: self.finder.profile.against_layer_direction * layers,
                 ..self.finder.profile.clone()
             };
-            let second = self
-                .alike(&dearer, search::Directions::default(), threads)
-                .route_side_by_side(&ways, plan, corridors, &mut again, cancel, events);
-            if second.is_better_than(&best, plan) {
-                best = second;
-                *layout = again;
+            let mut router = self.alike(&priced, search::Directions::default(), threads);
+            let ways: Vec<search::Directions> = (as_is.then(search::Directions::default))
+                .into_iter()
+                .chain(router.ways_to_run_layers())
+                .collect();
+            let mut routed = unrouted.clone();
+            let attempt =
+                router.route_side_by_side(&ways, plan, corridors, &mut routed, cancel, events);
+            if attempt.is_better_than(&best, plan) {
+                best = attempt;
+                *layout = routed;
             }
         }
         best.into_result(plan)
     }
 
-    /// Routes the board as is, which publishes progress, and with its layers
-    /// running each of `ways`, side by side, each in a layout of its own and
-    /// on its share of the threads; keeps the best routing in `layout`.
+    /// Routes the board with its layers running each of `ways`, side by side,
+    /// each in a layout of its own and on its share of the threads, the first
+    /// here, publishing progress; keeps the best routing in `layout`.
     fn route_side_by_side<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         ways: &[search::Directions],
@@ -193,17 +220,24 @@ impl<'a> Router<'a> {
         cancel: &CancelToken,
         events: &impl Publisher<Event>,
     ) -> Attempt {
-        // The routing as is takes the threads left over: it publishes
-        // progress, and on 4 threads the routings would leave one idle.
-        let threads = (self.scratches.len() / (ways.len() + 1)).max(1);
-        let others: Vec<(Router<'_>, L)> = (ways.iter())
+        let Some((&here, elsewhere)) = ways.split_first() else {
+            return self.route_attempt(plan, corridors, layout, cancel, events);
+        };
+        // The first routing takes the threads left over: on 4 threads, three
+        // routings would leave one idle.
+        let threads = (self.scratches.len() / ways.len()).max(1);
+        let others: Vec<(Router<'_>, L)> = (elsewhere.iter())
             .map(|&directions| {
                 let router = self.alike(self.finder.profile, directions, threads);
                 (router, layout.clone())
             })
             .collect();
-        let left_over = self.scratches.len().saturating_sub(threads * ways.len());
+        let left_over = self
+            .scratches
+            .len()
+            .saturating_sub(threads * elsewhere.len());
         self.scratches.truncate(left_over.max(1));
+        let directions = std::mem::replace(&mut self.finder.directions, here);
         let (first, others) = std::thread::scope(|scope| {
             let running: Vec<_> = (others.into_iter())
                 .map(|(mut router, mut layout)| {
@@ -220,6 +254,7 @@ impl<'a> Router<'a> {
                 .collect();
             (first, others)
         });
+        self.finder.directions = directions;
         let mut best = first;
         for (attempt, routed_layout) in others {
             if attempt.is_better_than(&best, plan) {
@@ -1497,6 +1532,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction,
+            rounds: 2,
         };
         let ways = Router::new(design, &rules, &profile).ways_to_run_layers();
         assert!(
@@ -1591,6 +1627,7 @@ mod tests {
             global_routing: false,
             batch_size: 16,
             against_layer_direction: 0.0,
+            rounds: 2,
         };
         let rules = traxide_rules::compile(
             &design,

@@ -1344,6 +1344,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction: 0.0,
+            rounds: 2,
         };
         let plan = Plan {
             connections: vec![Connection {
@@ -1397,6 +1398,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction: 0.5,
+            rounds: 2,
         };
         let connection = Connection {
             net: design.net_named("A"),
@@ -1445,6 +1447,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction: 0.5,
+            rounds: 2,
         };
         let connection = Connection {
             net: design.net_named("A"),

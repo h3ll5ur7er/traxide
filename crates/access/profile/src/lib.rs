@@ -102,6 +102,7 @@ struct Fields {
     global_routing: Option<bool>,
     batch_size: Option<u32>,
     against_layer_direction: Option<f64>,
+    rounds: Option<u32>,
 }
 
 impl Fields {
@@ -120,6 +121,7 @@ impl Fields {
             against_layer_direction: other
                 .against_layer_direction
                 .or(self.against_layer_direction),
+            rounds: other.rounds.or(self.rounds),
         }
     }
 
@@ -181,6 +183,15 @@ impl Fields {
                     });
                 }
             },
+            rounds: match self.rounds.unwrap_or(1) {
+                0 => {
+                    return Err(ProfileError::BelowOne {
+                        profile: name.into(),
+                        field: "rounds",
+                    });
+                }
+                rounds => rounds,
+            },
         })
     }
 }
@@ -228,6 +239,35 @@ mod tests {
             },
             default
         );
+    }
+
+    #[test]
+    fn the_thorough_profile_is_the_default_routed_in_more_rounds() {
+        let (thorough, default) = (
+            load_profile("thorough", None).expect("built in"),
+            load_profile("default", None).expect("built in"),
+        );
+        assert!(thorough.rounds > default.rounds);
+        assert_eq!(
+            Profile {
+                name: default.name.clone(),
+                rounds: default.rounds,
+                ..thorough
+            },
+            default
+        );
+    }
+
+    #[test]
+    fn a_board_is_routed_in_one_round_at_least() {
+        let file = file_with("[profiles.default]\nrounds = 0\n");
+        assert!(matches!(
+            load_profile("default", Some(&file)),
+            Err(ProfileError::BelowOne {
+                field: "rounds",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -319,7 +359,7 @@ mod tests {
         let error = load_profile("turbo", None).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "no profile named turbo; there are default, fast"
+            "no profile named turbo; there are default, fast, thorough"
         );
     }
 
