@@ -258,6 +258,30 @@ fn a_route_continues_a_fixed_lane_from_its_free_end_instead_of_leaving_it_dangli
 }
 
 #[test]
+fn a_route_that_continues_a_fixed_lane_keeps_doing_so_when_the_net_grows_as_a_tree() {
+    // A1's lane leads away from A2, to (5, 2). Joining A3's track to A2 straight from A1 is
+    // shorter than going on from the lane's end, but leaves that end dangling.
+    let mut design = DesignBuilder::new(20.0, 12.0)
+        .smd("A1", Some("A"), at(5.0, 5.0), 1.0, 0)
+        .smd("A2", Some("A"), at(15.0, 5.0), 1.0, 0)
+        .smd("A3", Some("A"), at(15.0, 10.0), 1.0, 0)
+        .build();
+    design.existing.tracks.push(traxide_contracts::Track {
+        net: design.net_named("A"),
+        layer: LayerId(0),
+        width: mm(0.2),
+        path: vec![at(5.0, 5.0), at(5.0, 2.0)],
+    });
+    let result = route(&design, &[("A1", "A2"), ("A3", "A2")]);
+    assert!(result.unrouted.is_empty());
+    let ends: Vec<Point> = (result.routes.tracks.iter())
+        .flat_map(|t| [t.path[0], t.path[t.path.len() - 1]])
+        .collect();
+    assert!(ends.contains(&at(5.0, 2.0)), "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn a_route_continues_a_fixed_lane_that_leads_away_from_its_target() {
     // The lane leads from A1 away from A2: joining A1 straight is shorter.
     let mut design = DesignBuilder::new(20.0, 10.0)

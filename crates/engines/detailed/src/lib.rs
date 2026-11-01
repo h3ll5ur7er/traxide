@@ -504,7 +504,9 @@ impl<'a> Router<'a> {
     /// and keeps the new way if it has fewer vias, or as many and is shorter:
     /// a pad beside its net's track joins the track, as a tree grows, rather
     /// than running beside it to a pad further on. A connection that another
-    /// now ends on stays where it is from then on, so nothing comes apart;
+    /// now ends on stays where it is from then on, so nothing comes apart, and
+    /// so does one that goes on from the free end of a lane of the board's
+    /// wiring, which would otherwise be left dangling;
     /// so this comes last, when no rip-up moves anything any more. The
     /// shortest routes go first, so branches join trunks rather than trunks
     /// moving onto their branches.
@@ -537,7 +539,7 @@ impl<'a> Router<'a> {
             let Some(routes) = attempt.routed[i].clone() else {
                 continue;
             };
-            if carrying[i] {
+            if carrying[i] || continues_a_lane(self.finder.design, connection, &routes) {
                 continue;
             }
             let sides = joined_without(plan, &attempt.routed, i);
@@ -1179,6 +1181,16 @@ fn track_length(routes: &Routes) -> i64 {
         .flat_map(|t| t.path.windows(2))
         .map(|w| w[0].distance(w[1]))
         .sum()
+}
+
+/// Whether `routes` go on from the free end of the board's wiring that a pad
+/// of `connection` starts: moved, they would leave that end dangling.
+fn continues_a_lane(design: &Design, connection: Connection, routes: &Routes) -> bool {
+    [connection.from, connection.to].into_iter().any(|pad| {
+        lanes::free_ends(design, design.pad(pad))
+            .iter()
+            .any(|end| reaches(routes, end.at))
+    })
 }
 
 /// Whether `new` has fewer vias than `old`, or as many and shorter tracks.
