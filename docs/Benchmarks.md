@@ -52,6 +52,24 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Diagonals pay their layer's direction in full (M5, TRX-82)
+
+With layer directions a diagonal step paid half of what a straight step across its layer's direction pays, and long 45° runs crossed TokenBoard's keys on the layer meant to run the other way. A diagonal step now pays as much as a straight one across. This machine, `--time-limit 90`, every board as complete, no rule broken that the board did not break:
+
+| Board | Vias before | **After** |
+| --- | --- | --- |
+| Sofle (Issue178) | 401 | **386** |
+| Issue022-AutoRouter_interrupted | 97 | **79** |
+| Issue217-8088sbc | 73 | **69** |
+| Issue015-StackOverflow | 63 | **60** |
+| Issue230-CNH | 66 | **64** |
+| Issue034-Green14SegLED | 110 | **107** |
+| keyboard-tkl | 62 | **61** |
+| RelayModule, ReadPlaceScope, DAC2020_bm04 | 49, 48, 41 | 52, 49, 42 |
+| all ten | 1,010 | **969** |
+
+TokenBoard without a limit: 267 vias instead of 275. The boards that reach the limit moved as such boards do from run to run: Mars-64 77 and 78 of 94 nets instead of 75 and 76, Issue066 238 of 266 instead of 228, LogicBoard 328 of 343 instead of 333, VGA 103 instead of 107, smoothieboard 234 instead of 239.
+
 ## Measured and not built: more ways to fewer vias on TokenBoard (November 2026)
 
 After [[TRX-80]] TokenBoard routes with 275 new vias without a limit (Freerouting: 199): 110 of them in pairs that hop under 10 mm of the other layer (Freerouting: 75), 165 single (124). By net: the rows 44 (21), the columns 126 (105), the MCU's small nets about 30 more. Tried on this machine, without a limit, each against 275:
@@ -59,6 +77,7 @@ After [[TRX-80]] TokenBoard routes with 275 new vias without a limit (Freeroutin
 - **Dearer vias still**: a via cost of 6 mm for the first round (12 for the second) 275, of 8 mm 300. The price of a via has done what it can.
 - **No layer directions while tidying**: tidying, taking out hops and growing trees with no direction cost 279, a quarter of it 275. ROW6's long run to the MCU hops six times either way: its way along the front copper is taken by other routes, not priced out.
 - **Dearer bends while growing trees**: the trees' search and its choice priced at 1 mm and 3 mm per 45° instead of 0.1 mm: 2,770 and 2,755 track segments instead of 2,807, but 278 and 279 vias. The sawtooth rows stay: their straight way is taken.
+- **Negotiating regions again**: for each connection with more vias than it needs, the routes within 1 mm of it (up to 40) taken out and negotiated again among themselves with vias twice as dear, tidied, and kept if all route with fewer vias: of 74 regions 3 kept, 7 vias fewer, in 216 s more; and connections of the trees that ended on the copper moved were left dangling.
 - **Fanning out from fine-pitch parts**: within 1.5 to 3 mm of the MCU's pads, a step along the side of the part paying half to twice its length more, so that tracks leave its sides straight: 273, 280 and 280 vias, the escapes tidier next to the part but the routes beyond it no better.
 
 ## Corpus baseline raised (November 2026)

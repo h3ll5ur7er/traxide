@@ -202,7 +202,7 @@ pub(crate) struct Search<'a, L> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Directions {
     /// What a straight step across its layer's direction costs beyond its
-    /// length, in thousandths of it; a diagonal step pays half. Zero: none.
+    /// length, in thousandths of it; a diagonal step pays as much. Zero: none.
     pub(crate) against_per_mille: i64,
     /// The layers whose tracks run horizontally, by bit; the others' run
     /// vertically.
@@ -265,15 +265,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     }
 
     /// What a step of `length` by (dx, dy) on `layer` costs for running
-    /// across the layer's direction.
+    /// across the layer's direction, a diagonal step as much as one straight
+    /// across: diagonals paying half ran long across the keys of TokenBoard
+    /// and cost 4 % more vias on the corpus boards (TRX-82).
     fn against_direction(&self, layer: u32, (dx, dy): (i32, i32), length: i64) -> i64 {
-        let share = self.directions.against_per_mille;
-        if share == 0 {
-            0
-        } else if dx != 0 && dy != 0 {
-            length * share / 2000
-        } else if (dy != 0) == self.directions.is_horizontal(layer) {
-            length * share / 1000
+        let diagonal = dx != 0 && dy != 0;
+        if diagonal || (dy != 0) == self.directions.is_horizontal(layer) {
+            length * self.directions.against_per_mille / 1000
         } else {
             0
         }
@@ -290,7 +288,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         };
         let share = self.directions.against_per_mille;
         let pitch = i64::from(self.profile.grid_pitch);
-        let diagonal = |n: i64| n * self.diagonal / pitch * (2000 + share) / 2000;
+        let diagonal = |n: i64| n * self.diagonal / pitch * (1000 + share) / 1000;
         let across_cost = |n: i64| n * (1000 + share) / 1000;
         let straight = along + across_cost(across);
         let with_diagonal = if along >= across {
@@ -1403,5 +1401,49 @@ mod tests {
         };
         assert_eq!(layers_with_horizontal(0), [LayerId(0)]);
         assert_eq!(layers_with_horizontal(1), [LayerId(1)]);
+    }
+
+    #[test]
+    fn a_diagonal_step_pays_its_layers_direction_like_a_step_across() {
+        let design = DesignBuilder::new(30.0, 20.0)
+            .layers(2)
+            .tht("A1", Some("A"), at(5.0, 10.0), 1.0)
+            .tht("A2", Some("A"), at(25.0, 10.0), 1.0)
+            .build();
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let layout = traxide_layout_access::Layout::build(&design, &rules);
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 0,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction: 0.5,
+        };
+        let connection = Connection {
+            net: design.net_named("A"),
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let search = Search::new(&design, &rules, &profile, connection, &layout, None, None)
+            .with_directions(Directions {
+                against_per_mille: 500,
+                horizontal_layers: 0b01,
+            });
+        let price = |(dx, dy)| search.against_direction(0, (dx, dy), 1_000_000);
+        assert_eq!(price((1, 0)), 0, "along");
+        assert_eq!(price((0, 1)), 500_000, "across");
+        assert_eq!(price((1, 1)), 500_000, "diagonal");
     }
 }
