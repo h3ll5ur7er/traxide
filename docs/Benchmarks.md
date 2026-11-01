@@ -52,6 +52,16 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Checks only where a step could gain (November 2026)
+
+Profiled on TokenBoard (one thread, gdb stack samples of a release build with line tables), the hop pass of [[TRX-76]] took 45 % of a routing, and finding out whether a via fits at a node a third of all the time. Every extra cost of a step is zero or more, so where a step's own price already reaches the best cost known for the state it leads to, the search now skips finding out whether the track or via fits: the step could not lower that cost. The sessions are the same to the byte; `--profile fast`, one thread, this machine: keyboard-tkl 7.1 s instead of 7.4 s, RelayModule 7.8 s instead of 9.0 s, Issue034 35.0 s instead of 41.9 s.
+
+The rest of the via check is four scans per via on TokenBoard, one per layer the via spans, planes included, with no early way out where it fits. Measured and not built: the hop pass's searches in a narrower window, 1 mm around the pads' box instead of the profile's 5 mm, made TokenBoard 147 s instead of 174 s but left 293 vias instead of 270, Sofle 402 instead of 386.
+
+## Lanes kept where trees grow (M5, TRX-83)
+
+Growing trees ([[TRX-76]]) could search a connection again from its pad to copper of its net nearby, after `continue_lanes` had routed it from the free end of the pad's lane of the board's wiring, and leave that end dangling: TokenBoard's GP0_UART_TX and LED_EN, in routings with other prices. A connection whose route goes on from such a free end now stays where it is. 120 sessions of the experiments above and 30 TokenBoard routings checked against their boards break no rule the board does not break itself.
+
 ## Diagonals pay their layer's direction in full (M5, TRX-82)
 
 With layer directions a diagonal step paid half of what a straight step across its layer's direction pays, and long 45° runs crossed TokenBoard's keys on the layer meant to run the other way. A diagonal step now pays as much as a straight one across. This machine, `--time-limit 90`, every board as complete, no rule broken that the board did not break:
