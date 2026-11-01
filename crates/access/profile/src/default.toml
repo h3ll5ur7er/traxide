@@ -25,6 +25,6 @@ rounds = 2
 [profiles.fast]
 against_layer_direction = 0.0
 
-# The default, routed in more rounds, with layer directions dearer and cheaper too: fewer vias, in about three times the time.
+# The default, routed in more rounds, with layer directions dearer and cheaper too: some 8 % fewer vias, in about twice the time.
 [profiles.thorough]
 rounds = 6

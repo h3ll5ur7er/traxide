@@ -52,6 +52,23 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Routed in more rounds: the `thorough` profile (M5, TRX-84)
+
+Which price of running across a layer's direction suits a board differs as much as the price of a via does. A profile's `rounds` says how many rounds of routings side by side are made while time is left: the default's two (its prices, then vias twice as dear), then layer directions half as dear again and a third cheaper, at each price of a via. `thorough` is the default in six rounds. This machine, `thorough` with `--time-limit 900`, `default` with the corpus's 90 s (Issue034 reaches it), every board as complete:
+
+| Board | `default` vias | **`thorough`** | `default` time | `thorough` |
+| --- | --- | --- | --- | --- |
+| Sofle (Issue178) | 386 | **364** | 56 s | 120 s |
+| Issue230-CNH | 64 | **45** | 71 s | 153 s |
+| Issue034-Green14SegLED | 107 | **94** | 90 s | 99 s |
+| RelayModule | 52 | **43** | 37 s | 83 s |
+| Issue022-AutoRouter_interrupted | 79 | **70** | 70 s | 145 s |
+| keyboard-tkl, Issue217-8088sbc, Issue015 | 61, 69, 60 | **58, 66**, 60 | 62, 33, 47 s | 145, 65, 108 s |
+| ReadPlaceScope, DAC2020_bm04 | 49, 42 | **47, 41** | 12, 28 s | 32, 70 s |
+| all ten | 969 | **888** | 507 s | 1,018 s |
+
+TokenBoard without a limit gains nothing: 270 vias either way, in 427 s instead of 174 s.
+
 ## Checks only where a step could gain (November 2026)
 
 Profiled on TokenBoard (one thread, gdb stack samples of a release build with line tables), the hop pass of [[TRX-76]] took 45 % of a routing, and finding out whether a via fits at a node a third of all the time. Every extra cost of a step is zero or more, so where a step's own price already reaches the best cost known for the state it leads to, the search now skips finding out whether the track or via fits: the step could not lower that cost. The sessions are the same to the byte; `--profile fast`, one thread, this machine: keyboard-tkl 7.1 s instead of 7.4 s, RelayModule 7.8 s instead of 9.0 s, Issue034 35.0 s instead of 41.9 s.

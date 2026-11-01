@@ -4,7 +4,7 @@ A profile trades routing speed against quality. `traxide route --profile NAME` p
 
 `fast` is `default` routed once, without layer directions (`against_layer_direction = 0`): on this machine TokenBoard in 62 s with 356 vias instead of 156 s with 275, Sofle in 29 s with 449 instead of 70 s with 401, CNH in 11 s with 87 instead of 65 s with 66 ([[TRX-81]]).
 
-`thorough` is `default` in six rounds instead of two: fewer vias, in about three times the time ([[TRX-84]]).
+`thorough` is `default` in six rounds instead of two: on this machine the ten corpus boards of [[TRX-84]] with 888 vias instead of 969, in about twice the time (Sofle 364 instead of 386, in 120 s instead of 56 s); TokenBoard gains nothing (270 vias, 427 s instead of 174 s).
 
 ```toml
 # traxide.toml: lengths and costs in millimetres

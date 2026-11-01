@@ -2,7 +2,7 @@
 id: TRX-84
 title: Route in more rounds at other prices where time is left
 type: improvement
-status: in-progress
+status: review
 assignee: claude
 priority: high
 labels: [detailed-routing, profiles]
@@ -16,4 +16,4 @@ After [[TRX-80]] the default routes a board in two rounds, the second with vias 
 - [x] `default` keeps two rounds; `thorough` is `default` in six (`the_thorough_profile_is_the_default_routed_in_more_rounds`); a profile routes in one round at least (`a_board_is_routed_in_one_round_at_least`)
 - [x] Test: more rounds route as much with no more vias (`more_rounds_route_as_much_with_no_more_vias`)
 - [x] `traxide route --help` and the README name the built-in profiles
-- [ ] Measured: `thorough` on the ten corpus boards and TokenBoard; `default` routes as before
+- [x] Measured (this machine, `--time-limit 900`, every board as complete): `thorough` routes the ten corpus boards with 888 vias instead of the default's 969, in about twice the time (Sofle 364 instead of 386 in 120 s instead of 56 s, CNH 45 instead of 64, Issue034 94 instead of 107, Issue022 70 instead of 79); TokenBoard without a limit 270 either way, in 427 s instead of 174 s. `default` routes as before (keyboard-tkl 61 vias, 8088sbc 69)

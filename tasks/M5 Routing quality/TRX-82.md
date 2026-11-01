@@ -2,7 +2,7 @@
 id: TRX-82
 title: A diagonal step pays its layer's direction in full
 type: improvement
-status: in-progress
+status: review
 assignee: claude
 priority: medium
 labels: [detailed-routing]

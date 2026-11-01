@@ -2,7 +2,7 @@
 id: TRX-83
 title: Growing trees leaves the lanes it was continuing dangling
 type: bug
-status: in-progress
+status: review
 assignee: claude
 priority: high
 labels: [detailed-routing]
