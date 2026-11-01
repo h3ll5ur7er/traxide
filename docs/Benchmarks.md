@@ -69,6 +69,8 @@ Taking out a hop routes the connections its new way crosses again among the rest
 
 TokenBoard without a limit: 261 vias instead of 270, in 140 s instead of 174 s.
 
+Measured and not built: the hop's own search, allowed to cross, three times as far too: 1,471 vias instead of 1,492 (`--profile fast`, TokenBoard and the ten), but TokenBoard 346 instead of 335 and Issue022 109 instead of 106, in 7 % more time: within how far the routing moves on small changes.
+
 ## Routed in more rounds: the `thorough` profile (M5, TRX-84)
 
 Which price of running across a layer's direction suits a board differs as much as the price of a via does. A profile's `rounds` says how many rounds of routings side by side are made while time is left: the default's two (its prices, then vias twice as dear), then layer directions half as dear again and a third cheaper, at each price of a via. `thorough` is the default in six rounds. This machine, `thorough` with `--time-limit 900`, `default` with the corpus's 90 s (Issue034 reaches it), every board as complete:
