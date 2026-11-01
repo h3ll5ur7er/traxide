@@ -1237,6 +1237,39 @@ fn a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out() {
     assert_legal(&design, &result.routes);
 }
 
+#[test]
+fn a_hop_is_taken_out_where_what_it_passes_finds_room_only_beyond_its_window() {
+    // As above, but a wall on the second layer leaves B a way there only
+    // round the wall's end, 7 mm off its pads: beyond the 5 mm its window
+    // reaches past them.
+    let design = DesignBuilder::new(24.0, 20.0)
+        .layers(2)
+        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .tht("B1", Some("B"), at(10.0, 3.0), 1.2)
+        .tht("B2", Some("B"), at(10.0, 17.0), 1.2)
+        .keepout(
+            wall(at(9.0, 0.0), at(11.0, 2.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.0, 18.0), at(11.0, 20.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(1.0, 9.0), at(16.5, 11.0)),
+            Some(1),
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("B1", "B2"), ("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
 fn track_length(routes: &Routes) -> f64 {
     routes
         .tracks

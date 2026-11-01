@@ -494,7 +494,8 @@ impl<'a> Router<'a> {
             layout.add_route(id, &moved);
             let mut rerouted = Vec::new();
             for &other in &crossed {
-                match finder.search(scratch, plan.connections[other.index()], layout, None, None) {
+                let connection = plan.connections[other.index()];
+                match finder.search_widening(scratch, connection, layout) {
                     Ok(route) => {
                         layout.add_route(other, &route);
                         rerouted.push(route);
@@ -1120,6 +1121,33 @@ impl Finder<'_> {
         .with_directions(self.directions);
         let steps = search.run(scratch)?;
         Ok(self.routes(&steps, connection))
+    }
+
+    /// A route crossing nothing, searched in the connection's window and,
+    /// where that holds no way, in windows WIDER_WINDOW times wider, up to
+    /// the whole board: a connection made room for elsewhere may find its
+    /// own room only further off (TRX-85).
+    fn search_widening(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+    ) -> Result<Routes, NoRoute> {
+        let board = self.design.outline.bounds();
+        let mut wider = self.profile.clone();
+        loop {
+            let finder = Finder {
+                profile: &wider,
+                ..*self
+            };
+            let found = finder.search(scratch, connection, layout, None, None);
+            let whole_board = search::window(self.design, wider.detour_margin, connection, None)
+                .contains_rect(board);
+            if found.is_ok() || whole_board {
+                return found;
+            }
+            wider.detour_margin = wider.detour_margin.saturating_mul(WIDER_WINDOW);
+        }
     }
 
     /// A route reaching the pads with lanes of the board's wiring only at the
