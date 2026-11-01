@@ -1,6 +1,8 @@
 # Profiles
 
-A profile trades routing speed against quality. `traxide route --profile NAME` picks one; `default` is built in. A `traxide.toml`, passed with `--config`, changes fields of the built-in profiles or adds profiles of its own; a new profile starts from `default`.
+A profile trades routing speed against quality. `traxide route --profile NAME` picks one; `default` and `fast` are built in. A `traxide.toml`, passed with `--config`, changes fields of the built-in profiles or adds profiles of its own; a new profile starts from `default`.
+
+`fast` is `default` routed once, without layer directions (`against_layer_direction = 0`): on this machine TokenBoard in 62 s with 356 vias instead of 156 s with 275, Sofle in 29 s with 449 instead of 70 s with 401, CNH in 11 s with 87 instead of 65 s with 66 ([[TRX-81]]).
 
 ```toml
 # traxide.toml: lengths and costs in millimetres

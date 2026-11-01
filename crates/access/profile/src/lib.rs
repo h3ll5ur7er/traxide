@@ -44,26 +44,39 @@ pub enum ProfileError {
 /// The profile called `name`. Profiles in `file` override fields of the built-in
 /// ones; a profile that only exists there starts from the default profile.
 pub fn load_profile(name: &str, file: Option<&Path>) -> Result<Profile, ProfileError> {
-    let mut profiles = parse(BUILT_IN, Path::new("built-in profiles"))?;
+    let mut profiles = BTreeMap::new();
+    overlay(
+        &mut profiles,
+        parse(BUILT_IN, Path::new("built-in profiles"))?,
+    );
     if let Some(path) = file {
         let text = std::fs::read_to_string(path).map_err(|source| ProfileError::Io {
             path: path.into(),
             source,
         })?;
-        for (key, overrides) in parse(&text, path)? {
-            let base = profiles
-                .get(&key)
-                .or_else(|| profiles.get(BASE_PROFILE))
-                .cloned()
-                .unwrap_or_default();
-            profiles.insert(key, base.overridden_by(overrides));
-        }
+        overlay(&mut profiles, parse(&text, path)?);
     }
     let fields = profiles.get(name).ok_or_else(|| ProfileError::Unknown {
         name: name.into(),
         known: profiles.keys().cloned().collect(),
     })?;
     fields.to_profile(name)
+}
+
+/// `profiles` with `overrides` over them; a profile not among them yet
+/// starts from the default profile.
+fn overlay(profiles: &mut BTreeMap<String, Fields>, overrides: BTreeMap<String, Fields>) {
+    let (base, others): (Vec<_>, Vec<_>) = overrides
+        .into_iter()
+        .partition(|(key, _)| key == BASE_PROFILE);
+    for (key, fields) in base.into_iter().chain(others) {
+        let start = profiles
+            .get(&key)
+            .or_else(|| profiles.get(BASE_PROFILE))
+            .cloned()
+            .unwrap_or_default();
+        profiles.insert(key, start.overridden_by(fields));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +214,23 @@ mod tests {
     }
 
     #[test]
+    fn the_fast_profile_is_the_default_routed_once() {
+        let (fast, default) = (
+            load_profile("fast", None).expect("built in"),
+            load_profile("default", None).expect("built in"),
+        );
+        assert_eq!(fast.against_layer_direction, 0.0);
+        assert_eq!(
+            Profile {
+                name: default.name.clone(),
+                against_layer_direction: default.against_layer_direction,
+                ..fast
+            },
+            default
+        );
+    }
+
+    #[test]
     fn a_search_cannot_be_weighted_below_the_cheapest_path() {
         let file = file_with("[profiles.default]\nheuristic_weight = 0.9\n");
         assert!(matches!(
@@ -289,7 +319,7 @@ mod tests {
         let error = load_profile("turbo", None).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "no profile named turbo; there are default"
+            "no profile named turbo; there are default, fast"
         );
     }
 
