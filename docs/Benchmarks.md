@@ -118,7 +118,7 @@ With layer directions a diagonal step paid half of what a straight step across i
 | RelayModule, ReadPlaceScope, DAC2020_bm04 | 49, 48, 41 | 52, 49, 42 |
 | all ten | 1,010 | **969** |
 
-TokenBoard without a limit: 267 vias instead of 275. The boards that reach the limit moved as such boards do from run to run: Mars-64 77 and 78 of 94 nets instead of 75 and 76, Issue066 238 of 266 instead of 228, LogicBoard 328 of 343 instead of 333, VGA 103 instead of 107, smoothieboard 234 instead of 239.
+TokenBoard without a limit: 267 vias instead of 275. DAC2020_bm05 routes 103 of 107 connections instead of 104: at U27, a 0.4 mm QFN whose pins two connections reach in neither routing, U23-2 to U27-6 now finds no way either. The boards that reach the limit moved as such boards do from run to run: Mars-64 77 and 78 of 94 nets instead of 75 and 76, Issue066 238 of 266 instead of 228, LogicBoard 328 of 343 instead of 333, VGA 103 instead of 107, smoothieboard 234 instead of 239.
 
 ## Measured and not built: more ways to fewer vias on TokenBoard (November 2026)
 
