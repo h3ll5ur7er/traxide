@@ -41,9 +41,9 @@ enum Command {
         /// into KiCad with --kicad.
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// The routing profile: `default`; `fast`, routed once, for a first
-        /// look; `thorough`, routed in more rounds, for fewer vias; or one of
-        /// a --config file.
+        /// The routing profile: `default`, routed in several rounds at other
+        /// prices, for fewest vias; `fast`, routed once, for a first look; or
+        /// one of a --config file.
         #[arg(long, default_value = "default")]
         profile: String,
         /// A traxide.toml with profiles of your own.

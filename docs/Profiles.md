@@ -1,10 +1,10 @@
 # Profiles
 
-A profile trades routing speed against quality. `traxide route --profile NAME` picks one; `default`, `fast` and `thorough` are built in. A `traxide.toml`, passed with `--config`, changes fields of the built-in profiles or adds profiles of its own; a new profile starts from `default`.
+A profile trades routing speed against quality. `traxide route --profile NAME` picks one; `default` and `fast` are built in. A `traxide.toml`, passed with `--config`, changes fields of the built-in profiles or adds profiles of its own; a new profile starts from `default`.
 
 `fast` is `default` routed once, without layer directions (`against_layer_direction = 0`): on this machine TokenBoard in 62 s with 356 vias instead of 156 s with 275, Sofle in 29 s with 449 instead of 70 s with 401, CNH in 11 s with 87 instead of 65 s with 66 ([[TRX-81]]).
 
-`thorough` is `default` in six rounds instead of two: on this machine the ten corpus boards of [[TRX-84]] with 888 vias instead of 969, in about twice the time (Sofle 364 instead of 386, in 120 s instead of 56 s); TokenBoard gains nothing (270 vias, 427 s instead of 174 s).
+`default` routes in six rounds ([[TRX-84]], [[TRX-86]]): on this machine the ten corpus boards of [[TRX-84]] with 888 vias instead of 969 in two rounds, in about twice the time; TokenBoard gains nothing (270 vias, 427 s instead of 174 s).
 
 ```toml
 # traxide.toml: lengths and costs in millimetres
@@ -32,7 +32,7 @@ Misspelled keys are errors, so a typo never silently does nothing.
 | `global_routing` | false | Plan a corridor for every connection first and keep detailed routing inside it. Off, because it made the keyboard and the key matrices slower (see [[Benchmarks]]) |
 | `batch_size` | 16 | At most how many connections, far enough apart that their copper cannot meet, are searched side by side and then committed in order. More keeps more threads busy. It can change the routes, as it changes the order in which ripped-up connections queue again; the number of threads never does (see [[Architecture/Parallelism-and-GPU#batches]]) |
 | `against_layer_direction` | 0.5 | What a step across its layer's direction costs, as a share of its length; a diagonal step pays as much as a straight one across. The board is routed three ways side by side, each on its share of the threads: without directions, and with each routable layer running horizontally or vertically, crosswise to the next, in either orientation; where time is left, further rounds route it again at other prices (`rounds`); the routing that completes more, or as much with fewer vias, stays. It takes about three times the processor time and memory of one routing, twice over where the second round runs, and on a machine with fewer cores than three, longer. `0` routes once, with no directions. On TokenBoard, without a limit, 267 vias instead of 356 (see [[Benchmarks]]) |
-| `rounds` | 2 | How many rounds of routings side by side are made while time is left; the best of all stays. The first is at the profile's prices; the second with vias twice as dear, also without layer directions; the third to sixth with layer directions half as dear again or a third cheaper, with vias as dear as the profile's or twice as dear. Each round takes about as long as the first. Without layer directions, one routing is all ([[TRX-84]]) |
+| `rounds` | 6 | How many rounds of routings side by side are made while time is left; the best of all stays. The first is at the profile's prices; the second with vias twice as dear, also without layer directions; the third to sixth with layer directions half as dear again or a third cheaper, with vias as dear as the profile's or twice as dear. Each round takes about as long as the first. Without layer directions, one routing is all ([[TRX-84]]) |
 | `heuristic_weight` | 1.2 | How boldly a search heads for its target. `1.0` finds the cheapest path; more finds a path within that factor of the cheapest, much faster. On a 102-key matrix, 1.2 routed 15 times faster than 1.0 for 0.3 % more track (see [[Benchmarks]]) |
 
 Profiles hold trade-offs, never design rules: widths and clearances come from the board. Nor do they hold the number of threads (`traxide route --threads N`, all cores by default), which changes how fast traxide routes, never what.

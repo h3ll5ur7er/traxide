@@ -242,20 +242,9 @@ mod tests {
     }
 
     #[test]
-    fn the_thorough_profile_is_the_default_routed_in_more_rounds() {
-        let (thorough, default) = (
-            load_profile("thorough", None).expect("built in"),
-            load_profile("default", None).expect("built in"),
-        );
-        assert!(thorough.rounds > default.rounds);
-        assert_eq!(
-            Profile {
-                name: default.name.clone(),
-                rounds: default.rounds,
-                ..thorough
-            },
-            default
-        );
+    fn the_default_profile_routes_in_six_rounds() {
+        let profile = load_profile("default", None).expect("built in");
+        assert_eq!(profile.rounds, 6);
     }
 
     #[test]
@@ -359,7 +348,7 @@ mod tests {
         let error = load_profile("turbo", None).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "no profile named turbo; there are default, fast, thorough"
+            "no profile named turbo; there are default, fast"
         );
     }
 
