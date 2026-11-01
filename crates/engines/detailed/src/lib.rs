@@ -90,9 +90,10 @@ const CROSSED_ROOM: i32 = 6;
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
 /// pass took out 16 more vias in 10 s, a third 2 more in 6 s (TRX-76). With
 /// crossings an eighth of a via per edge, a third pass leaves TokenBoard and
-/// the ten boards with 1,311 vias instead of 1,355, in 14 % more time
-/// (TRX-87).
-const MOST_HOP_PASSES: usize = 3;
+/// the ten boards with 1,311 vias instead of 1,355, in 14 % more time; a
+/// fourth TokenBoard with 318 instead of 332 and the ten with 975 instead of
+/// 979, in 8 % more; a fifth takes out none on TokenBoard (TRX-87).
+const MOST_HOP_PASSES: usize = 4;
 
 pub struct Router<'a> {
     finder: Finder<'a>,
