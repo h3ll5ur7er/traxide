@@ -52,6 +52,10 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Dearer vias while tidying (M5, TRX-88)
+
+Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65.
+
 ## Cheaper crossings, a third pass (M5, TRX-87)
 
 Since what a hop's way crosses searches six times as far for room ([[TRX-85]]), crossing a routed connection pays at an eighth of a via per grid edge instead of a quarter, and taking out hops makes three passes instead of two. With `--profile fast`, TokenBoard and the ten corpus boards together: 1,311 vias instead of 1,492, in 303 s instead of 215 s; an eighth with two passes 1,355, a twelfth 1,362, a sixteenth 1,390, half a via 1,659, a quarter with three passes 1,467. Issue034 98 instead of 117, Issue015 49 instead of 70, RelayModule 42 instead of 53, CNH 67 instead of 87, Issue022 78 instead of 106; TokenBoard 332 instead of 335. With the default profile, TokenBoard without a limit: 256 vias instead of 261, in 579 s instead of 476 s. A fourth pass: with `--profile fast` TokenBoard 318 vias instead of 332, the ten 975 instead of 979, in 8 % more time, and with the default profile TokenBoard 253; a fifth takes out none more.
