@@ -52,6 +52,10 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Corpus baseline raised (November 2026)
+
+`corpus/baseline.json` is now CI's run of PR #34, the code main holds since: the boards complete before are complete, routing them takes the longer times of [[TRX-79]] and [[TRX-80]], and the boards that reach the 90 s limit route what that run routed, among them LogicBoard 342 of 343 nets (331 before), Issue103-Unrouted 177 of 282 (165), Issue066 234 of 266 (227), hw48na 161 of 163 (155) and bug-design 50 of 74 (44). Three such boards routed fewer in that run, as boards against the clock do from run to run: Mars-64 79 and 76 of 94 (82 and 81), Issue208 233 of 415 (236).
+
 ## Routed again with dearer vias (M5, TRX-80)
 
 The price of a via moves the routing most, and no price suits every board: at 4 mm instead of 2 mm for all routings, TokenBoard routed with 275 vias instead of 314 and 8088sbc with 73 instead of 93, but LogicBoard completed 315 of 343 nets within 90 s instead of 333, and Issue066 224 of 266 instead of 231 ([[TRX-80]]). So where time is left after the three routings of [[TRX-79]], the board is routed the three ways again with vias twice as dear, and the better of all six stays. This machine, `--time-limit 90`, against main; every board as complete or more:
