@@ -36,7 +36,7 @@ pub struct Profile {
     /// What a step across its layer's direction costs, as a share of its
     /// length; a diagonal step pays half. The board is routed side by side
     /// without directions and with its layers running crosswise in either
-    /// orientation, and the routing with fewer vias stays. Zero routes once,
-    /// with no directions.
+    /// orientation, and again with dearer vias where time is left; the routing
+    /// with fewer vias stays. Zero routes once, with no directions.
     pub against_layer_direction: f64,
 }

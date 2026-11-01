@@ -58,6 +58,12 @@ const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
 /// cheaply, more tracks have to move, and fewer of them find room again.
 const CROSSING_EDGES_PER_VIA: i64 = 4;
 
+/// How many times dearer vias are when the board is routed again: dearer
+/// throughout, TokenBoard routed with 275 vias instead of 314, 8088sbc 73
+/// instead of 93, CNH 66 instead of 84, but LogicBoard completed 18 nets
+/// fewer within 90 s; which price suits a board only routing tells.
+const DEARER_VIAS: i64 = 2;
+
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
 /// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
 const MOST_HOP_PASSES: usize = 2;
@@ -134,13 +140,14 @@ impl<'a> Router<'a> {
     /// congested boards but lose a
     /// connection on some that rip-up completes, which never pay for them (TRX-56).
     ///
-    /// The board is routed so three ways side by side, each in a layout of its
-    /// own: as is, and with each layer's tracks running one way, crosswise to
-    /// the next, in either orientation (`ways_to_run_layers`). The routing that
-    /// completes more, or as much with fewer vias, stays, the first of equals:
-    /// running layers crosswise leaves fewer hops to take out where it suits
-    /// the board, and only routing tells which way does (TRX-77, TRX-79).
-    /// Each routing searches on its share of the threads.
+    /// The board is routed so three ways side by side (`route_side_by_side`):
+    /// as is, and with each layer's tracks running one way, crosswise to the
+    /// next, in either orientation (`ways_to_run_layers`). Where time is left,
+    /// the three routings are made again with vias DEARER_VIAS times dearer.
+    /// The routing that completes more, or as much with fewer vias, stays,
+    /// the first of equals: running layers crosswise leaves fewer hops to
+    /// take out where it suits the board, and only routing tells which way,
+    /// and which price of a via, does (TRX-77, TRX-79, TRX-80).
     pub fn route_plan<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         plan: &Plan,
@@ -155,9 +162,43 @@ impl<'a> Router<'a> {
                 .route_attempt(plan, corridors, layout, cancel, events)
                 .into_result(plan);
         }
+        let threads = self.scratches.len();
+        let mut again = layout.clone();
+        let mut best = self.route_side_by_side(&ways, plan, corridors, layout, cancel, events);
+        if !cancel.is_cancelled() && !self.is_past_deadline() {
+            let dearer = Profile {
+                via_cost: self.finder.profile.via_cost * DEARER_VIAS,
+                ..self.finder.profile.clone()
+            };
+            let second = self
+                .alike(&dearer, search::Directions::default(), threads)
+                .route_side_by_side(&ways, plan, corridors, &mut again, cancel, events);
+            if second.is_better_than(&best, plan) {
+                best = second;
+                *layout = again;
+            }
+        }
+        best.into_result(plan)
+    }
+
+    /// Routes the board as is, which publishes progress, and with its layers
+    /// running each of `ways`, side by side, each in a layout of its own and
+    /// on its share of the threads; keeps the best routing in `layout`.
+    fn route_side_by_side<L: LayoutAccess + Clone + Send + Sync>(
+        &mut self,
+        ways: &[search::Directions],
+        plan: &Plan,
+        corridors: Option<&Corridors>,
+        layout: &mut L,
+        cancel: &CancelToken,
+        events: &impl Publisher<Event>,
+    ) -> Attempt {
         let threads = (self.scratches.len() / (ways.len() + 1)).max(1);
-        let others: Vec<(Router<'a>, L)> = (ways.iter())
-            .map(|&directions| (self.alike(directions, threads), layout.clone()))
+        let others: Vec<(Router<'_>, L)> = (ways.iter())
+            .map(|&directions| {
+                let router = self.alike(self.finder.profile, directions, threads);
+                (router, layout.clone())
+            })
             .collect();
         self.scratches.truncate(threads);
         let (first, others) = std::thread::scope(|scope| {
@@ -183,7 +224,7 @@ impl<'a> Router<'a> {
                 *layout = routed_layout;
             }
         }
-        best.into_result(plan)
+        best
     }
 
     /// The ways each layer's tracks may run besides any way, crosswise to the
@@ -209,13 +250,23 @@ impl<'a> Router<'a> {
             .to_vec()
     }
 
-    /// A router like this one, its layers running the way `directions` says,
-    /// searching on `threads` threads.
-    fn alike(&self, directions: search::Directions, threads: usize) -> Router<'a> {
+    /// A router like this one, routing by `profile`, its layers running the
+    /// way `directions` says, searching on `threads` threads.
+    fn alike<'b>(
+        &self,
+        profile: &'b Profile,
+        directions: search::Directions,
+        threads: usize,
+    ) -> Router<'b>
+    where
+        'a: 'b,
+    {
         Router {
             finder: Finder {
+                design: self.finder.design,
+                rules: self.finder.rules,
+                profile,
                 directions,
-                ..self.finder
             },
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
