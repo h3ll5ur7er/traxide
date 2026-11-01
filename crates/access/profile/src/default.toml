@@ -18,3 +18,7 @@ batch_size = 16
 # Routed side by side without directions and with layers crosswise either way; a step across costs half its length more.
 # On TokenBoard 292 vias instead of 335 with the back copper horizontal, 400 the other way round (docs/Benchmarks.md).
 against_layer_direction = 0.5
+
+# The default, routed once without layer directions: about a third of the default's time and memory, some vias more.
+[profiles.fast]
+against_layer_direction = 0.0

@@ -2,7 +2,7 @@
 id: TRX-80
 title: Route the board again with dearer vias where time is left
 type: improvement
-status: in-progress
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]
@@ -28,4 +28,4 @@ On boards that reach the limit, 4 mm completed more nets on Mars-64 (78 of 94 in
 - [x] Where time is left after the three routings of [[TRX-79]], the board is routed the three ways again with vias twice as dear (`DEARER_VIAS`), and the routing that completes more, or as much with fewer vias, stays; a board that reaches the limit in the first round routes as before (`Router::route_plan`, `Router::route_side_by_side`)
 - [x] Test: the routing kept completes as much as routing once, with no more vias (`the_routing_kept_completes_as_much_as_routing_once_with_no_more_vias`)
 - [x] TokenBoard and the corpus boards: fewer vias, no board less complete (TokenBoard 275 without a limit, CNH 66 instead of 84, 8088sbc 73 instead of 93; see [[Benchmarks]]); boards that finish take two to three times as long
-- [ ] The corpus gate passes
+- [x] The corpus gate passes (PR #34)
