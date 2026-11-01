@@ -61,13 +61,12 @@ const CROSSING_EDGES_PER_VIA: i64 = 4;
 /// The rounds after the first: their prices, as factors of the profile's
 /// price of a via and of running across a layer's direction, and whether
 /// they route the board as is too, which only the price of a via moves.
-/// Vias twice as
-/// dear throughout routed TokenBoard with 275 vias instead of 314, 8088sbc
-/// with 73 instead of 93, CNH with 66 instead of 84, but LogicBoard with
-/// 18 nets fewer within 90 s (TRX-80); layer directions half as dear again
-/// or a third cheaper, Sofle with 364 or 385 vias instead of 386, CNH with
-/// 45 or 63 instead of 64, TokenBoard with 291 instead of 267 (TRX-84):
-/// which prices suit a board only routing tells.
+/// Vias twice as dear throughout routed TokenBoard with 275 vias instead of
+/// 314, 8088sbc with 73 instead of 93, CNH with 66 instead of 84, but
+/// LogicBoard with 18 nets fewer within 90 s (TRX-80); layer directions half
+/// as dear again or a third cheaper, Sofle with 364 or 385 vias instead of
+/// 386, CNH with 45 or 63 instead of 64, TokenBoard with 291 instead of 267
+/// (TRX-84): which prices suit a board only routing tells.
 const LATER_ROUNDS: [(i64, f64, bool); 5] = [
     (2, 1.0, true),
     (1, 1.5, false),
@@ -164,11 +163,10 @@ impl<'a> Router<'a> {
     /// as is, and with each layer's tracks running one way, crosswise to the
     /// next, in either orientation (`ways_to_run_layers`). Where time is left,
     /// it is routed again in the profile's further rounds, at the prices of
-    /// LATER_ROUNDS. The
-    /// routing that completes more, or as much with fewer vias, stays, the
-    /// first of equals: running layers crosswise leaves fewer hops to take
-    /// out where it suits the board, and only routing tells which way, and
-    /// which prices, do (TRX-77, TRX-79, TRX-80, TRX-84).
+    /// LATER_ROUNDS. The routing that completes more, or as much with fewer
+    /// vias, stays, the first of equals: running layers crosswise leaves fewer
+    /// hops to take out where it suits the board, and only routing tells which
+    /// way, and which prices, do (TRX-77, TRX-79, TRX-80, TRX-84).
     pub fn route_plan<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         plan: &Plan,
