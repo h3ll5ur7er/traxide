@@ -52,6 +52,23 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Room for what a hop's way crosses (M5, TRX-85)
+
+Taking out a hop routes the connections its new way crosses again among the rest, and the change stays only if all of them route; they searched only their own window, 5 mm beyond their pads, and on TokenBoard 42 of 156 attempts failed there. They now search six times as far. With `--profile fast`, TokenBoard and the ten boards below together: 1,592 vias in their own window, 1,509 three times as far, 1,492 six and twelve times; widening only where no way was found, four times at a time as negotiation does, 1,548: the wider window finds the room with fewer vias, not only some room. This machine, `default`, `--time-limit 90`, every board as complete, no rule broken that the board does not break:
+
+| Board | Vias before | **After** |
+| --- | --- | --- |
+| Sofle (Issue178) | 386 | **360** |
+| Issue034-Green14SegLED | 107 | **93** |
+| RelayModule | 52 | **40** |
+| ReadPlaceScope | 49 | **44** |
+| keyboard-tkl | 61 | **59** |
+| CNH, Issue015, bm04, 8088sbc | 64, 60, 42, 69 | the same |
+| Issue022-AutoRouter_interrupted | 79 | 83 |
+| all ten | 969 | **914** |
+
+TokenBoard without a limit: 261 vias instead of 270, in 140 s instead of 174 s.
+
 ## Routed in more rounds: the `thorough` profile (M5, TRX-84)
 
 Which price of running across a layer's direction suits a board differs as much as the price of a via does. A profile's `rounds` says how many rounds of routings side by side are made while time is left: the default's two (its prices, then vias twice as dear), then layer directions half as dear again and a third cheaper, at each price of a via. `thorough` is the default in six rounds. This machine, `thorough` with `--time-limit 900`, `default` with the corpus's 90 s (Issue034 reaches it), every board as complete:
