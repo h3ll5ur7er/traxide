@@ -41,15 +41,21 @@ const ROUNDS_WITHOUT_GAIN: usize = 4;
 /// How much wider each window of a search that found no way grows.
 const WIDER_WINDOW: i32 = 4;
 
-/// How many times dearer a via is when routing is tidied: negotiating at that
-/// price costs connections and time, but once everything is routed a
-/// connection may well find a way with fewer vias among the rest (TRX-72).
-const TIDYING_VIA_COST: i64 = 4;
+/// How many times dearer a via is when routing is tidied, hops are taken out
+/// and trees grow: negotiating at that price costs connections and time, but
+/// once everything is routed a connection may well find a way with fewer
+/// vias among the rest (TRX-72). Since what a hop's way crosses finds room
+/// further off, dearer pays: with `--profile fast`, TokenBoard and ten corpus
+/// boards together 1,293 vias at 4 times, 1,221 at 6, 1,201 at 8, 1,162 at 10
+/// (TRX-88).
+const TIDYING_VIA_COST: i64 = 10;
 
 /// How boldly a search heads for its target when routing is tidied: any way
 /// with fewer vias will do, and the profile's weight, searching for the
-/// cheapest, made tidying take as long as routing on small boards.
-const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
+/// cheapest, made tidying take as long as routing on small boards. 1.5
+/// instead of 2 with vias 10 times dearer: 1,090 vias instead of 1,162, in
+/// 17 % more time; with vias 12 times dearer 1,120 (TRX-88).
+const TIDYING_HEURISTIC_WEIGHT: f64 = 1.5;
 
 /// Taking out hops, a grid edge overlapping a routed connection costs this
 /// share of a via: crossing a track overlaps it for some 8 edges at 0.1 mm,
