@@ -343,14 +343,26 @@ fn reports_a_connection_it_cannot_route() {
     assert_eq!(result.routes, Routes::default());
 }
 
-#[test]
-fn later_connections_keep_clear_of_earlier_ones() {
-    let design = DesignBuilder::new(20.0, 20.0)
+/// A from left to right and B from bottom to top across a board whose
+/// walls leave no way round the ends of either: one has to cross the other
+/// on the other layer.
+fn crossing_pairs() -> Design {
+    let beside = |x: f64, y: f64| wall(at(x - 0.9, y - 0.9), at(x + 0.9, y + 0.9));
+    DesignBuilder::new(20.0, 20.0)
         .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
         .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
         .smd("B1", Some("B"), at(10.0, 2.0), 1.0, 0)
         .smd("B2", Some("B"), at(10.0, 18.0), 1.0, 0)
-        .build();
+        .keepout(beside(0.5, 10.0), None, KeepoutScope::Everything)
+        .keepout(beside(19.5, 10.0), None, KeepoutScope::Everything)
+        .keepout(beside(10.0, 0.5), None, KeepoutScope::Everything)
+        .keepout(beside(10.0, 19.5), None, KeepoutScope::Everything)
+        .build()
+}
+
+#[test]
+fn later_connections_keep_clear_of_earlier_ones() {
+    let design = crossing_pairs();
     let result = route(&design, &[("A1", "A2"), ("B1", "B2")]);
     assert!(result.unrouted.is_empty());
     assert!(
@@ -362,12 +374,7 @@ fn later_connections_keep_clear_of_earlier_ones() {
 
 #[test]
 fn connections_that_may_cross_are_searched_one_after_the_other() {
-    let design = DesignBuilder::new(20.0, 20.0)
-        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
-        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
-        .smd("B1", Some("B"), at(10.0, 2.0), 1.0, 0)
-        .smd("B2", Some("B"), at(10.0, 18.0), 1.0, 0)
-        .build();
+    let design = crossing_pairs();
     let in_one_batch = Profile {
         batch_size: 2,
         ..profile()
