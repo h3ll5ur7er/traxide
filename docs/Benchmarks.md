@@ -52,6 +52,15 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Measured and not built: more ways to fewer vias on TokenBoard (November 2026)
+
+After [[TRX-80]] TokenBoard routes with 275 new vias without a limit (Freerouting: 199): 110 of them in pairs that hop under 10 mm of the other layer (Freerouting: 75), 165 single (124). By net: the rows 44 (21), the columns 126 (105), the MCU's small nets about 30 more. Tried on this machine, without a limit, each against 275:
+
+- **Dearer vias still**: a via cost of 6 mm for the first round (12 for the second) 275, of 8 mm 300. The price of a via has done what it can.
+- **No layer directions while tidying**: tidying, taking out hops and growing trees with no direction cost 279, a quarter of it 275. ROW6's long run to the MCU hops six times either way: its way along the front copper is taken by other routes, not priced out.
+- **Dearer bends while growing trees**: the trees' search and its choice priced at 1 mm and 3 mm per 45° instead of 0.1 mm: 2,770 and 2,755 track segments instead of 2,807, but 278 and 279 vias. The sawtooth rows stay: their straight way is taken.
+- **Fanning out from fine-pitch parts**: within 1.5 to 3 mm of the MCU's pads, a step along the side of the part paying half to twice its length more, so that tracks leave its sides straight: 273, 280 and 280 vias, the escapes tidier next to the part but the routes beyond it no better.
+
 ## Corpus baseline raised (November 2026)
 
 `corpus/baseline.json` is now CI's run of PR #34, the code main holds since: the boards complete before are complete, routing them takes the longer times of [[TRX-79]] and [[TRX-80]], and the boards that reach the 90 s limit route what that run routed, among them LogicBoard 342 of 343 nets (331 before), Issue103-Unrouted 177 of 282 (165), Issue066 234 of 266 (227), hw48na 161 of 163 (155) and bug-design 50 of 74 (44). Three such boards routed fewer in that run, as boards against the clock do from run to run: Mars-64 79 and 76 of 94 (82 and 81), Issue208 233 of 415 (236).
