@@ -54,7 +54,7 @@ TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's
 
 ## Dearer vias while tidying (M5, TRX-88)
 
-Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65.
+Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65. With the default profile, TokenBoard without a limit routes with **229** vias instead of 253 (Freerouting: 199), but with more track: 12,977 mm with the board's own instead of 12,483 (Freerouting's board 12,381), in fewer segments, 2,716 instead of 2,788.
 
 ## Cheaper crossings, a third pass (M5, TRX-87)
 

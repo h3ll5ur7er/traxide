@@ -26,4 +26,5 @@ Tidying, taking out hops and growing trees search with vias 4 times as dear as n
 | 12 | 1.5 | 1,120 | 275 | 516 s |
 
 - [x] Vias 10 times dearer and a weight of 1.5 while tidying (`TIDYING_VIA_COST`, `TIDYING_HEURISTIC_WEIGHT`): 16 % fewer vias in 40 % more time; Issue022 53 instead of 78, Sofle 347 instead of 390, Issue015 47 instead of 49
-- [ ] TokenBoard with the default profile, without a limit; the corpus gate passes
+- [x] TokenBoard with the default profile, without a limit: 229 vias instead of 253, no rule broken; 12,977 mm of track with the board's own instead of 12,483 (Freerouting's board 12,381), 2,716 track segments instead of 2,788; 1,016 s, with other routing beside it
+- [ ] The corpus gate passes
