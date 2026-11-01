@@ -482,6 +482,47 @@ fn more_rounds_route_as_much_with_no_more_vias() {
 }
 
 #[test]
+fn each_round_is_announced_before_its_routing() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let rules = traxide_rules::compile(
+        &design,
+        Purpose::Routing {
+            grid_pitch: 100_000,
+        },
+    );
+    let mut layout = Layout::build(&design, &rules);
+    let plan = Plan {
+        connections: pairs
+            .iter()
+            .map(|&(from, to)| connection(&design, from, to))
+            .collect(),
+    };
+    let rounds = std::cell::RefCell::new(Vec::new());
+    let watch = |event: Event| {
+        if let Event::RoundStarted { round, of } = event {
+            rounds.borrow_mut().push((round, of));
+        }
+    };
+    let profile = Profile {
+        against_layer_direction: 0.5,
+        rounds: 3,
+        ..profile()
+    };
+    Router::new(&design, &rules, &profile).route_plan(
+        &plan,
+        None,
+        &mut layout,
+        &CancelToken::new(),
+        &watch,
+    );
+    assert_eq!(*rounds.borrow(), [(1, 3), (2, 3), (3, 3)]);
+}
+
+#[test]
 fn the_routes_do_not_depend_on_the_number_of_threads() {
     let (design, pairs) = scattered_nets();
     let pairs: Vec<(&str, &str)> = pairs

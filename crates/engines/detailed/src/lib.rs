@@ -188,13 +188,16 @@ impl<'a> Router<'a> {
         let all_ways: Vec<search::Directions> = std::iter::once(search::Directions::default())
             .chain(ways)
             .collect();
+        let rounds = (self.finder.profile.rounds as usize).clamp(1, LATER_ROUNDS.len() + 1);
+        let of = rounds as u32;
+        events.publish(Event::RoundStarted { round: 1, of });
         let mut best = self.route_side_by_side(&all_ways, plan, corridors, layout, cancel, events);
-        let rounds = self.finder.profile.rounds as usize;
-        let later = LATER_ROUNDS.iter().take(rounds.saturating_sub(1));
-        for &(dearer_vias, layers, as_is) in later {
+        let later = LATER_ROUNDS.iter().take(rounds - 1);
+        for (round, &(dearer_vias, layers, as_is)) in (2..).zip(later) {
             if cancel.is_cancelled() || self.is_past_deadline() {
                 break;
             }
+            events.publish(Event::RoundStarted { round, of });
             let priced = Profile {
                 via_cost: self.finder.profile.via_cost * dearer_vias,
                 against_layer_direction: self.finder.profile.against_layer_direction * layers,
