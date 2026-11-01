@@ -514,6 +514,16 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             if let Some(finish) = scratch.finish.get(self.layer_node(state)) {
                 relax(None, finish, None, scratch);
             }
+            // Whether a step to `next` costing at least `step_cost` cannot
+            // lower its cost: what fits costs nothing less, so finding out
+            // whether a track or via fits there would be wasted.
+            let cannot_improve = |next: State, step_cost: i64, scratch: &Scratch| {
+                cost + step_cost
+                    >= scratch
+                        .best
+                        .get(self.slot(next) as usize)
+                        .unwrap_or(i64::MAX)
+            };
             let is_open_around = scratch
                 .open_around
                 .get_or_insert_with(self.layer_node(state), || self.is_open_around(state));
@@ -522,6 +532,22 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 let next = (state.node.0 + dx, state.node.1 + dy);
                 // Turns sharper than 90° leave acute angles that trap etchant.
                 if turn > 2 || !self.grid.contains(next) || !self.in_corridor(next) {
+                    continue;
+                }
+                let length = if dx * dy == 0 {
+                    i64::from(self.profile.grid_pitch)
+                } else {
+                    self.diagonal
+                };
+                let step_cost = length
+                    + i64::from(turn) * self.profile.bend_cost
+                    + self.against_direction(state.layer, (*dx, *dy), length);
+                let next_state = State {
+                    node: next,
+                    layer: state.layer,
+                    heading: direction as u8,
+                };
+                if cannot_improve(next_state, step_cost, scratch) {
                     continue;
                 }
                 let segment = Segment::new(self.grid.point(state.node), self.grid.point(next));
@@ -547,21 +573,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     })
                 };
                 if extra != BLOCKED {
-                    let length = if dx * dy == 0 {
-                        i64::from(self.profile.grid_pitch)
-                    } else {
-                        self.diagonal
-                    };
-                    let next = State {
-                        node: next,
-                        layer: state.layer,
-                        heading: direction as u8,
-                    };
-                    let cost = length
-                        + i64::from(turn) * self.profile.bend_cost
-                        + extra
-                        + self.against_direction(state.layer, (*dx, *dy), length);
-                    relax(Some(next), cost, None, scratch);
+                    relax(Some(next_state), step_cost + extra, None, scratch);
                 }
             }
             for (position, &kind) in self.via_kinds.iter().enumerate() {
@@ -575,6 +587,14 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         && spans.connects(LayerId(state.layer), l)
                 });
                 for layer in others.collect::<Vec<_>>() {
+                    let next = State {
+                        node: state.node,
+                        layer: layer.0,
+                        heading: UNSET,
+                    };
+                    if cannot_improve(next, self.profile.via_cost, scratch) {
+                        continue;
+                    }
                     let check = self.grid.index(state.node) * self.via_kinds.len() + position;
                     let extra = scratch.via_extra.get_or_insert_with(check, || {
                         let via = Via {
@@ -585,11 +605,6 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         self.via_extra(&via).unwrap_or(BLOCKED)
                     });
                     if extra != BLOCKED {
-                        let next = State {
-                            node: state.node,
-                            layer: layer.0,
-                            heading: UNSET,
-                        };
                         relax(
                             Some(next),
                             self.profile.via_cost + extra,
