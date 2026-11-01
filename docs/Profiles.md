@@ -2,7 +2,7 @@
 
 A profile trades routing speed against quality. `traxide route --profile NAME` picks one; `default` and `fast` are built in. A `traxide.toml`, passed with `--config`, changes fields of the built-in profiles or adds profiles of its own; a new profile starts from `default`.
 
-`fast` is `default` routed once, without layer directions (`against_layer_direction = 0`): on this machine TokenBoard in 62 s with 356 vias instead of 156 s with 275, Sofle in 29 s with 449 instead of 70 s with 401, CNH in 11 s with 87 instead of 65 s with 66 ([[TRX-81]]).
+`fast` is `default` routed once, without layer directions (`against_layer_direction = 0`): on this machine TokenBoard in 54 s with 335 vias instead of 476 s with 261, Sofle in 26 s with 419 vias, CNH in 11 s with 87 ([[TRX-81]], [[TRX-86]]).
 
 `default` routes in six rounds ([[TRX-84]], [[TRX-86]]): on this machine the ten corpus boards of [[TRX-84]] with 888 vias instead of 969 in two rounds, in about twice the time; TokenBoard gains nothing (270 vias, 427 s instead of 174 s).
 
