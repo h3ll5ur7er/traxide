@@ -52,6 +52,10 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Cheaper crossings, a third pass (M5, TRX-87)
+
+Since what a hop's way crosses searches six times as far for room ([[TRX-85]]), crossing a routed connection pays at an eighth of a via per grid edge instead of a quarter, and taking out hops makes three passes instead of two. With `--profile fast`, TokenBoard and the ten corpus boards together: 1,311 vias instead of 1,492, in 303 s instead of 215 s; an eighth with two passes 1,355, a twelfth 1,362, a sixteenth 1,390, half a via 1,659, a quarter with three passes 1,467. Issue034 98 instead of 117, Issue015 49 instead of 70, RelayModule 42 instead of 53, CNH 67 instead of 87, Issue022 78 instead of 106; TokenBoard 332 instead of 335. With the default profile, TokenBoard without a limit: 256 vias instead of 261, in 579 s instead of 476 s.
+
 ## Room for what a hop's way crosses (M5, TRX-85)
 
 Taking out a hop routes the connections its new way crosses again among the rest, and the change stays only if all of them route; they searched only their own window, 5 mm beyond their pads, and on TokenBoard 42 of 156 attempts failed there. They now search six times as far. With `--profile fast`, TokenBoard and the ten boards below together: 1,592 vias in their own window, 1,509 three times as far, 1,492 six and twelve times; widening only where no way was found, four times at a time as negotiation does, 1,548: the wider window finds the room with fewer vias, not only some room. This machine, `default`, `--time-limit 90`, every board as complete, no rule broken that the board does not break:
