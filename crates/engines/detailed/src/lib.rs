@@ -53,10 +53,14 @@ const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
 
 /// Taking out hops, a grid edge overlapping a routed connection costs this
 /// share of a via: crossing a track overlaps it for some 8 edges at 0.1 mm,
-/// so a crossing costs about two vias. On TokenBoard a quarter of a via per
+/// so a crossing costs about one via. On TokenBoard a quarter of a via per
 /// edge left 379 vias of 446, a sixteenth 405, half a via 428: crossed
-/// cheaply, more tracks have to move, and fewer of them find room again.
-const CROSSING_EDGES_PER_VIA: i64 = 4;
+/// cheaply, more tracks had to move, and fewer of them found room again
+/// (TRX-76). Since what is crossed finds room further off (CROSSED_ROOM), an
+/// eighth pays: with `--profile fast` TokenBoard and ten corpus boards
+/// together 1,355 vias instead of 1,492, a twelfth 1,362, a sixteenth 1,390,
+/// half a via 1,659 (TRX-87).
+const CROSSING_EDGES_PER_VIA: i64 = 8;
 
 /// The rounds after the first: their prices, as factors of the profile's
 /// price of a via and of running across a layer's direction, and whether
@@ -84,8 +88,11 @@ const LATER_ROUNDS: [(i64, f64, bool); 5] = [
 const CROSSED_ROOM: i32 = 6;
 
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
-/// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
-const MOST_HOP_PASSES: usize = 2;
+/// pass took out 16 more vias in 10 s, a third 2 more in 6 s (TRX-76). With
+/// crossings an eighth of a via per edge, a third pass leaves TokenBoard and
+/// the ten boards with 1,311 vias instead of 1,355, in 14 % more time
+/// (TRX-87).
+const MOST_HOP_PASSES: usize = 3;
 
 pub struct Router<'a> {
     finder: Finder<'a>,
