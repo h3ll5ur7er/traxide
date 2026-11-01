@@ -76,6 +76,14 @@ const LATER_ROUNDS: [(i64, f64, bool); 5] = [
     (2, 0.7, false),
 ];
 
+/// How many times further than the profile's detour margin a connection that
+/// a hop's new way crosses may stray to find room again: in its own window,
+/// 42 of 156 attempts on TokenBoard failed. Measured with `--profile fast`
+/// on TokenBoard and ten corpus boards together: 1,592 vias in its own
+/// window, 1,509 three times as far, 1,492 six times, 1,548 widening four
+/// times at a time only where none was found, for 6 % more time (TRX-85).
+const CROSSED_ROOM: i32 = 6;
+
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
 /// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
 const MOST_HOP_PASSES: usize = 2;
@@ -443,6 +451,14 @@ impl<'a> Router<'a> {
             profile: &dearer,
             ..self.finder
         };
+        let roomier = Profile {
+            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
+            ..dearer.clone()
+        };
+        let room_finder = Finder {
+            profile: &roomier,
+            ..self.finder
+        };
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
         let crossing = search::Negotiation {
@@ -495,7 +511,7 @@ impl<'a> Router<'a> {
             let mut rerouted = Vec::new();
             for &other in &crossed {
                 let connection = plan.connections[other.index()];
-                match finder.search_widening(scratch, connection, layout) {
+                match room_finder.search(scratch, connection, layout, None, None) {
                     Ok(route) => {
                         layout.add_route(other, &route);
                         rerouted.push(route);
@@ -1121,33 +1137,6 @@ impl Finder<'_> {
         .with_directions(self.directions);
         let steps = search.run(scratch)?;
         Ok(self.routes(&steps, connection))
-    }
-
-    /// A route crossing nothing, searched in the connection's window and,
-    /// where that holds no way, in windows WIDER_WINDOW times wider, up to
-    /// the whole board: a connection made room for elsewhere may find its
-    /// own room only further off (TRX-85).
-    fn search_widening(
-        &self,
-        scratch: &mut search::Scratch,
-        connection: Connection,
-        layout: &impl LayoutAccess,
-    ) -> Result<Routes, NoRoute> {
-        let board = self.design.outline.bounds();
-        let mut wider = self.profile.clone();
-        loop {
-            let finder = Finder {
-                profile: &wider,
-                ..*self
-            };
-            let found = finder.search(scratch, connection, layout, None, None);
-            let whole_board = search::window(self.design, wider.detour_margin, connection, None)
-                .contains_rect(board);
-            if found.is_ok() || whole_board {
-                return found;
-            }
-            wider.detour_margin = wider.detour_margin.saturating_mul(WIDER_WINDOW);
-        }
     }
 
     /// A route reaching the pads with lanes of the board's wiring only at the
