@@ -193,6 +193,8 @@ impl<'a> Router<'a> {
         cancel: &CancelToken,
         events: &impl Publisher<Event>,
     ) -> Attempt {
+        // The routing as is takes the threads left over: it publishes
+        // progress, and on 4 threads the routings would leave one idle.
         let threads = (self.scratches.len() / (ways.len() + 1)).max(1);
         let others: Vec<(Router<'_>, L)> = (ways.iter())
             .map(|&directions| {
@@ -200,7 +202,8 @@ impl<'a> Router<'a> {
                 (router, layout.clone())
             })
             .collect();
-        self.scratches.truncate(threads);
+        let left_over = self.scratches.len().saturating_sub(threads * ways.len());
+        self.scratches.truncate(left_over.max(1));
         let (first, others) = std::thread::scope(|scope| {
             let running: Vec<_> = (others.into_iter())
                 .map(|(mut router, mut layout)| {
