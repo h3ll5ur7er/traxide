@@ -2,7 +2,7 @@
 id: TRX-90
 title: Connections that meet at a pad they share do not hold each other in place
 type: bug
-status: in-progress
+status: review
 assignee: claude
 priority: high
 labels: [detailed-routing]
@@ -18,4 +18,4 @@ Growing trees ([[TRX-76]]) leaves a connection where it is once another ends on 
 - [x] `ends_on` leaves out the route's own pads
 - [x] TokenBoard and the corpus boards: fewer vias, no net less complete. With the default profile, TokenBoard without a limit routes with 221 vias instead of 229, 48 of them in hops instead of 70, with 12,962 mm of track; with `--profile fast`, TokenBoard and the ten corpus boards 1,078 instead of 1,090 (TokenBoard 252 instead of 259, Sofle 343 instead of 347), none with more
 - [x] Measured and not built: growing trees twice, 1,075 vias instead of 1,078 in 3 % more time
-- [ ] The corpus gate passes
+- [x] The corpus gate passes (Benchmark run 165)
