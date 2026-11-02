@@ -380,11 +380,13 @@ fn drc_verdict(judged: &Result<kicad::Judgement>) -> String {
 }
 
 /// What `traxide check --json` says about a board and its routes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Judgement {
     nets: usize,
     incomplete_nets: usize,
     violations: usize,
+    vias: usize,
+    track_mm: f64,
 }
 
 #[derive(Debug)]
@@ -455,6 +457,8 @@ fn judgement(json: &str) -> Option<Judgement> {
             .filter_map(serde_json::Value::as_u64)
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
             .sum(),
+        vias: count("vias")?,
+        track_mm: report["track_length_mm"].as_f64()?,
     })
 }
 
@@ -534,13 +538,60 @@ impl Row {
 
     fn result(&self, judgement: Judgement) -> String {
         let broken_before = self.before.map_or(0, |b| b.violations);
+        let (vias, track_mm) = self.added(judgement);
         format!(
-            "{} of {} nets, {} rules broken",
+            "{} of {} nets, {} rules broken, {vias} vias, {track_mm:.0} mm",
             judgement.nets - judgement.incomplete_nets,
             judgement.nets,
             judgement.violations.saturating_sub(broken_before)
         )
     }
+
+    /// The vias and the length of track a routing added to the board's own.
+    fn added(&self, judgement: Judgement) -> (usize, f64) {
+        let before = self.before.unwrap_or_default();
+        (
+            judgement.vias.saturating_sub(before.vias),
+            (judgement.track_mm - before.track_mm).max(0.0),
+        )
+    }
+
+    /// What a routing added, where it completed the board without breaking
+    /// a rule the board did not break already.
+    fn added_cleanly(&self, attempt: &Attempt) -> Option<(usize, f64)> {
+        let Attempt::Judged { judgement, .. } = attempt else {
+            return None;
+        };
+        let broken_before = self.before.map_or(0, |b| b.violations);
+        (judgement.incomplete_nets == 0 && judgement.violations <= broken_before)
+            .then(|| self.added(*judgement))
+    }
+}
+
+/// The vias and track the routers added on the boards both complete without
+/// breaking rules: on the others one router's copper does not compare with
+/// the other's.
+fn side_by_side(rows: &[Row]) -> String {
+    let both: Vec<_> = rows
+        .iter()
+        .filter_map(|row| {
+            let freerouting = row.added_cleanly(row.freerouting.as_ref()?)?;
+            Some((row.added_cleanly(&row.traxide)?, freerouting))
+        })
+        .collect();
+    let sum = |added: &mut dyn Iterator<Item = (usize, f64)>| {
+        added.fold((0, 0.0), |(v, l), (vias, mm)| (v + vias, l + mm))
+    };
+    let traxide = sum(&mut both.iter().map(|pair| pair.0));
+    let freerouting = sum(&mut both.iter().map(|pair| pair.1));
+    format!(
+        "On the {} boards both route complete without breaking rules: traxide {} vias, {:.0} mm of track; Freerouting {} vias, {:.0} mm.",
+        both.len(),
+        traxide.0,
+        traxide.1,
+        freerouting.0,
+        freerouting.1
+    )
 }
 
 fn table(rows: &[Row], with_freerouting: bool) -> String {
@@ -569,6 +620,7 @@ fn table(rows: &[Row], with_freerouting: bool) -> String {
             rows.iter()
                 .filter_map(|r| r.freerouting.as_ref().map(|f| (r, f))),
         ));
+        lines.push(side_by_side(rows));
     }
     lines.join("\n")
 }
@@ -623,7 +675,9 @@ mod tests {
             Some(Judgement {
                 nets: 31,
                 incomplete_nets: 2,
-                violations: 5
+                violations: 5,
+                vias: 1,
+                track_mm: 3.5,
             })
         );
     }
@@ -659,6 +713,7 @@ mod tests {
                 nets: 4,
                 incomplete_nets: 4,
                 violations: 2,
+                ..Judgement::default()
             }),
             traxide: Attempt::Judged {
                 seconds: 1.0,
@@ -666,6 +721,7 @@ mod tests {
                     nets: 4,
                     incomplete_nets: 0,
                     violations: 2,
+                    ..Judgement::default()
                 },
             },
             freerouting: None,
@@ -674,7 +730,7 @@ mod tests {
         };
         assert_eq!(
             row.cells(false, false),
-            "| b | 1.0 s, 4 of 4 nets, 0 rules broken |"
+            "| b | 1.0 s, 4 of 4 nets, 0 rules broken, 0 vias, 0 mm |"
         );
         assert_eq!(
             row.outcome(),
@@ -716,6 +772,7 @@ mod tests {
             nets: 9,
             incomplete_nets,
             violations: 1,
+            ..Judgement::default()
         };
         let row = |board: &str, author| Row {
             board: board.into(),
@@ -738,8 +795,8 @@ mod tests {
             [
                 "| Board | traxide | Freerouting | Routed by its author |",
                 "| --- | --- | --- | --- |",
-                "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken | failed: no | 8 of 9 nets, 0 rules broken |",
-                "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken | failed: no | — |",
+                "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | failed: no | 8 of 9 nets, 0 rules broken, 0 vias, 0 mm |",
+                "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | failed: no | — |",
             ]
         );
     }
@@ -782,6 +839,7 @@ mod tests {
             nets: 9,
             incomplete_nets: 0,
             violations: 0,
+            ..Judgement::default()
         };
         let row = |board: &str, kicad_drc: Option<&str>| Row {
             board: board.into(),
@@ -807,9 +865,80 @@ mod tests {
             [
                 "| Board | traxide | Routed by its author | KiCad's DRC |",
                 "| --- | --- | --- | --- |",
-                "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken | 9 of 9 nets, 0 rules broken | traxide: clean; author: clean |",
-                "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken | 9 of 9 nets, 0 rules broken | — |",
+                "| tokenboard-kb | 2.0 s, 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | traxide: clean; author: clean |",
+                "| fixture | 2.0 s, 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | 9 of 9 nets, 0 rules broken, 0 vias, 0 mm | — |",
             ]
+        );
+    }
+
+    #[test]
+    fn a_router_is_credited_only_with_the_vias_and_track_it_added() {
+        let before = Judgement {
+            nets: 4,
+            incomplete_nets: 4,
+            vias: 3,
+            track_mm: 10.0,
+            ..Judgement::default()
+        };
+        let routed = Judgement {
+            nets: 4,
+            vias: 7,
+            track_mm: 25.4,
+            ..Judgement::default()
+        };
+        let row = Row {
+            board: "b".into(),
+            before: Some(before),
+            traxide: Attempt::Judged {
+                seconds: 1.0,
+                judgement: routed,
+            },
+            freerouting: None,
+            author: None,
+            kicad_drc: None,
+        };
+        assert_eq!(
+            row.cells(false, false),
+            "| b | 1.0 s, 4 of 4 nets, 0 rules broken, 4 vias, 15 mm |"
+        );
+    }
+
+    #[test]
+    fn boards_both_routers_complete_cleanly_compare_their_vias_and_track() {
+        let judged = |incomplete_nets, violations, vias, track_mm| Judgement {
+            nets: 4,
+            incomplete_nets,
+            violations,
+            vias,
+            track_mm,
+        };
+        let row = |traxide, freerouting| Row {
+            board: "b".into(),
+            before: Some(judged(4, 0, 0, 0.0)),
+            author: None,
+            traxide: Attempt::Judged {
+                seconds: 1.0,
+                judgement: traxide,
+            },
+            freerouting: Some(Attempt::Judged {
+                seconds: 2.0,
+                judgement: freerouting,
+            }),
+            kicad_drc: None,
+        };
+        let rows = [
+            row(judged(0, 0, 3, 100.0), judged(0, 0, 5, 90.0)),
+            row(judged(0, 0, 1, 50.0), judged(0, 0, 2, 40.0)),
+            // Freerouting breaks a rule here, and traxide leaves a net open
+            // on the next: neither board counts.
+            row(judged(0, 0, 9, 9.0), judged(0, 1, 0, 0.0)),
+            row(judged(1, 0, 0, 0.0), judged(0, 0, 9, 9.0)),
+        ];
+        assert_eq!(
+            table(&rows, true).lines().last(),
+            Some(
+                "On the 2 boards both route complete without breaking rules: traxide 4 vias, 150 mm of track; Freerouting 7 vias, 130 mm."
+            )
         );
     }
 }
