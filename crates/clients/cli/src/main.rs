@@ -61,7 +61,8 @@ enum Command {
         #[arg(long, value_name = "REPORT.json")]
         drc: Option<PathBuf>,
         /// Stop negotiating after this many seconds and route what is left once
-        /// more without ripping anything up; routing ends a little later.
+        /// more without ripping anything up, for a tenth of the time given at most
+        /// (a second at least); what is left stays unrouted.
         #[arg(long, value_name = "SECONDS", value_parser = seconds)]
         time_limit: Option<Duration>,
         /// Route the board's own tracks and vias again, but for those locked in

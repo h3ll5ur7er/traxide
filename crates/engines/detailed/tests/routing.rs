@@ -715,6 +715,34 @@ fn past_its_deadline_routing_rips_nothing_up_but_routes_what_still_fits() {
 }
 
 #[test]
+fn long_past_its_deadline_routing_searches_nothing_more() {
+    // Given no time, routing may still search for a second past its deadline;
+    // five seconds past it, that second is long gone.
+    let design = one_way_for_two();
+    let rules = traxide_rules::compile(
+        &design,
+        Purpose::Routing {
+            grid_pitch: 100_000,
+        },
+    );
+    let mut layout = Layout::build(&design, &rules);
+    let plan = Plan {
+        connections: vec![
+            connection(&design, "X1", "X2"),
+            connection(&design, "Y1", "Y2"),
+        ],
+    };
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(5))
+        .expect("the clock has run five seconds");
+    let result = Router::new(&design, &rules, &profile())
+        .with_deadline(long_ago)
+        .route_plan(&plan, None, &mut layout, &CancelToken::new(), &Silent);
+    assert_eq!(result.unrouted.len(), 2);
+    assert!(result.routes.tracks.is_empty());
+}
+
+#[test]
 fn a_connection_whose_only_way_runs_further_round_than_its_window_routes() {
     // The wall's end lies 15 mm beyond the pads, three times the margin.
     let design = DesignBuilder::new(40.0, 20.0)

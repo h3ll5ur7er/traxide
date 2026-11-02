@@ -17,7 +17,7 @@ use search::NoRoute;
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use traxide_contracts::geometry::{Point, Rect, Segment};
 use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Corridors, Design, Event, LayoutAccess, NetId,
@@ -101,12 +101,22 @@ const CROSSED_ROOM: i32 = 6;
 /// 979, in 8 % more; a fifth takes out none on TokenBoard (TRX-87).
 const MOST_HOP_PASSES: usize = 4;
 
+/// Past its deadline, routing searches for what is still queued for this
+/// share of the time it was given more, a second at least, and leaves the
+/// rest unrouted: LogicBoard's searches without rip-up took up to 43 s past a
+/// 90 s limit, as each way of running the layers drained its queue on one
+/// thread.
+const SEARCHING_PAST_THE_DEADLINE: u32 = 10;
+const LEAST_SEARCHING_PAST_THE_DEADLINE: Duration = Duration::from_secs(1);
+
 pub struct Router<'a> {
     finder: Finder<'a>,
     /// One per thread: each search needs its own memory.
     scratches: Vec<search::Scratch>,
     /// When negotiation stops ripping up, whatever it would still gain.
     deadline: Option<Instant>,
+    /// When it stops searching (SEARCHING_PAST_THE_DEADLINE).
+    searching_ends: Option<Instant>,
     /// Whether the board's own copper cuts each connection asked about off,
     /// which no routing changes: a search for one cut off floods all it can
     /// reach, again on every attempt.
@@ -133,6 +143,7 @@ impl<'a> Router<'a> {
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
+            searching_ends: None,
             cut_off: HashMap::new(),
         }
     }
@@ -141,15 +152,24 @@ impl<'a> Router<'a> {
     /// routes are the same on any number of them.
     /// Stops negotiation at `deadline`: what is still queued then routes once
     /// more without crossing anything, each in its own window only, so routing
-    /// ends a little later.
+    /// ends a little later: a tenth of the time given at most, or a second
+    /// (SEARCHING_PAST_THE_DEADLINE).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        let given = deadline.saturating_duration_since(Instant::now());
+        let past = (given / SEARCHING_PAST_THE_DEADLINE).max(LEAST_SEARCHING_PAST_THE_DEADLINE);
         self.deadline = Some(deadline);
+        self.searching_ends = Some(deadline + past);
         self
     }
 
     fn is_past_deadline(&self) -> bool {
         self.deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn is_done_searching(&self) -> bool {
+        self.searching_ends
+            .is_some_and(|ends| Instant::now() >= ends)
     }
 
     pub fn with_threads(mut self, threads: usize) -> Self {
@@ -331,6 +351,7 @@ impl<'a> Router<'a> {
             },
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
+            searching_ends: self.searching_ends,
             cut_off: self.cut_off.clone(),
         }
     }
@@ -722,7 +743,7 @@ impl<'a> Router<'a> {
         let mut unrouted = Vec::new();
         let (mut hemmed_in, mut exits_taken, mut cut_off) = (Vec::new(), Vec::new(), Vec::new());
         while !state.queue.is_empty() {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || self.is_done_searching() {
                 unrouted.extend(state.queue.drain(..));
                 break;
             }
