@@ -657,9 +657,11 @@ impl<'a> Router<'a> {
                 layout.add_route(id, &routes);
                 continue;
             };
+            let design = self.finder.design;
+            let pads = [connection.from, connection.to].map(|pad| design.pad(pad).position);
             for &other in sides.iter().flatten() {
                 if let Some(theirs) = &attempt.routed[other]
-                    && ends_on(&grown, theirs)
+                    && ends_on(&grown, theirs, pads)
                 {
                     carrying[other] = true;
                 }
@@ -1290,8 +1292,9 @@ fn is_tidier(new: &Routes, old: &Routes) -> bool {
 }
 
 /// Whether a track of `routes` starts or ends on `theirs`: on one of their
-/// tracks or vias.
-fn ends_on(routes: &Routes, theirs: &Routes) -> bool {
+/// tracks or vias, elsewhere than at one of its own `pads`, which joins it to
+/// what ends there without them.
+fn ends_on(routes: &Routes, theirs: &Routes, pads: [Point; 2]) -> bool {
     let on = |at: Point| {
         theirs.vias.iter().any(|v| v.position == at)
             || (theirs.tracks.iter())
@@ -1301,7 +1304,7 @@ fn ends_on(routes: &Routes, theirs: &Routes) -> bool {
     (routes.tracks.iter())
         .flat_map(|t| [t.path.first(), t.path.last()])
         .flatten()
-        .any(|&at| on(at))
+        .any(|&at| !pads.contains(&at) && on(at))
 }
 
 /// Whether `at` lies on the segment from `a` to `b`.
@@ -1747,5 +1750,26 @@ mod tests {
             more_connections.standing(&plan)
                 > attempt(&[true, false, false, false, false]).standing(&plan)
         );
+    }
+
+    fn track_from(path: &[(i32, i32)]) -> Routes {
+        Routes {
+            tracks: vec![Track {
+                net: NetId::from_index(0),
+                layer: LayerId(0),
+                width: 100_000,
+                path: path.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+            }],
+            vias: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_route_that_meets_another_at_its_own_pad_does_not_end_on_it() {
+        // Theirs runs from (0, 0) to the pad at (10, 0), where ours starts.
+        let pads = [Point::new(10, 0), Point::new(10, 20)];
+        let theirs = track_from(&[(0, 0), (10, 0)]);
+        assert!(!ends_on(&track_from(&[(10, 0), (10, 20)]), &theirs, pads));
+        assert!(ends_on(&track_from(&[(5, 0), (10, 20)]), &theirs, pads));
     }
 }

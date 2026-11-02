@@ -56,7 +56,11 @@ TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's
 
 Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65. With the default profile, TokenBoard without a limit routes with **229** vias instead of 253 (Freerouting: 199), but with more track: 12,977 mm with the board's own instead of 12,483 (Freerouting's board 12,381), in fewer segments, 2,716 instead of 2,788.
 
-Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095.
+Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095. Growing trees once more at the end, two-pad nets too, with a heuristic weight of 1 so routes pull tight: 1,084 vias, 0.7 % less track, but 1.3 % more corners and 17 % more time.
+
+## Connections that meet at a shared pad (M5, TRX-90)
+
+TokenBoard routed with the default profile had two vias on every key column where one would do: the column ran down the front copper, dropped through a via to the back copper's switch pad, and a second via 6 mm on lifted it back. Growing trees left a connection in place once another ended on its copper, and took one that merely started at the same pad for one ending on it. Without that, TokenBoard routes with **221** vias instead of 229 with the default profile, without a limit (48 in hops instead of 70; 12,962 mm of track; Freerouting: 199); with `--profile fast`, TokenBoard and the ten corpus boards with 1,078 instead of 1,090, none with more. Growing trees twice: 1,075, in 3 % more time; not built.
 
 ## Searching past the deadline, bounded (M5, TRX-89)
 
