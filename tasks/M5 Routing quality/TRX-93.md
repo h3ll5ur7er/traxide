@@ -18,4 +18,5 @@ CI's corpus gate for [[TRX-92]] failed on two boards whose every connection was 
 - [x] Failing tests: a route of a via alone ends on the copper it stands on (`a_route_of_a_via_alone_ends_on_the_copper_it_stands_on`); a route grown off its pad holds the routes still reaching the pad (`a_route_grown_off_its_pad_holds_the_routes_still_reaching_the_pad`)
 - [x] `ends_on` counts a route's vias; a route grown off a pad holds the connections of that side still reaching it, and is not taken where none does (`holding_pads_left`)
 - [x] Issue034 and bm04 within 90 s: every net complete, no rule broken
+- [x] With `--profile fast`, TokenBoard and 28 corpus boards: 1,621 vias instead of 1,618 (Issue034, Sofle and keyboard-tkl one more each)
 - [ ] The corpus gate passes
