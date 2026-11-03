@@ -69,7 +69,7 @@ CI's corpus run ([[TRX-91]]) showed CNH (Issue230) with 48 vias where Freeroutin
 | half a via | 1,640 | 832 s |
 | five eighths of a via | 1,650 | 788 s |
 
-CNH 19 instead of 52, 8088sbc 51 instead of 71, Pajalnaja 26 instead of 42, bm07 20 instead of 33, RelayModule 27 instead of 35; Sofle 362 instead of 343, Issue034 97 instead of 82, TokenBoard 258 instead of 252. CNH with the default profile at half a via: 13 vias without a limit instead of 37, 19 within 90 s instead of 48.
+CNH 19 instead of 52, 8088sbc 51 instead of 71, Pajalnaja 26 instead of 42, bm07 20 instead of 33, RelayModule 27 instead of 35; Sofle 362 instead of 343, Issue034 97 instead of 82, TokenBoard 258 instead of 252. CNH with the default profile at half a via: 13 vias without a limit instead of 37, 19 within 90 s instead of 48. TokenBoard with the default profile, without a limit: 218 vias instead of 221, 12,789 mm of track instead of 12,962, in 1,507 s instead of 1,141.
 
 ## Connections that meet at a shared pad (M5, TRX-90)
 
