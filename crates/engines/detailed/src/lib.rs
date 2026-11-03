@@ -661,6 +661,15 @@ impl<'a> Router<'a> {
                 continue;
             };
             let design = self.finder.design;
+            let Some(holding) =
+                holding_pads_left(design, connection, &grown, &sides, &attempt.routed)
+            else {
+                layout.add_route(id, &routes);
+                continue;
+            };
+            for other in holding {
+                carrying[other] = true;
+            }
             let pads = [connection.from, connection.to].map(|pad| design.pad(pad).position);
             for &other in sides.iter().flatten() {
                 if let Some(theirs) = &attempt.routed[other]
@@ -1294,9 +1303,10 @@ fn is_tidier(new: &Routes, old: &Routes) -> bool {
     (new.vias.len(), track_length(new)) < (old.vias.len(), track_length(old))
 }
 
-/// Whether a track of `routes` starts or ends on `theirs`: on one of their
-/// tracks or vias, elsewhere than at one of its own `pads`, which joins it to
-/// what ends there without them.
+/// Whether a track of `routes` starts or ends on `theirs`, elsewhere than at
+/// one of its own `pads`, which joins it to what ends there without them; or
+/// a via of `routes` stands on their copper, as a route of a via alone joins
+/// copper crossing on two layers.
 fn ends_on(routes: &Routes, theirs: &Routes, pads: [Point; 2]) -> bool {
     let on = |at: Point| {
         theirs.vias.iter().any(|v| v.position == at)
@@ -1308,6 +1318,50 @@ fn ends_on(routes: &Routes, theirs: &Routes, pads: [Point; 2]) -> bool {
         .flat_map(|t| [t.path.first(), t.path.last()])
         .flatten()
         .any(|&at| !pads.contains(&at) && on(at))
+        || routes.vias.iter().any(|v| on(v.position))
+}
+
+/// The connections that must stay where they are now that `grown`, a new way
+/// for `connection`, may start or end on its net's copper beside a pad
+/// instead of on the pad: for each pad it leaves, those of the pad's side
+/// that still reach the pad, which would otherwise be left alone once they
+/// grew elsewhere too. `None` where none does: the new way leaves the pad
+/// alone itself.
+fn holding_pads_left(
+    design: &Design,
+    connection: Connection,
+    grown: &Routes,
+    sides: &[Vec<usize>; 2],
+    routed: &[Option<Routes>],
+) -> Option<Vec<usize>> {
+    let mut holding = Vec::new();
+    for (pad, side) in [connection.from, connection.to].into_iter().zip(sides) {
+        if reaches_pad(design, grown, pad) {
+            continue;
+        }
+        let reaching: Vec<usize> = (side.iter().copied())
+            .filter(|&k| {
+                routed[k]
+                    .as_ref()
+                    .is_some_and(|r| reaches_pad(design, r, pad))
+            })
+            .collect();
+        if reaching.is_empty() {
+            return None;
+        }
+        holding.extend(reaching);
+    }
+    Some(holding)
+}
+
+/// Whether `routes` reach `pad`: at its centre, or at a free end of the
+/// lanes of the board's wiring it starts.
+fn reaches_pad(design: &Design, routes: &Routes, pad: traxide_contracts::PadId) -> bool {
+    let pad = design.pad(pad);
+    reaches(routes, pad.position)
+        || lanes::free_ends(design, pad)
+            .iter()
+            .any(|end| reaches(routes, end.at))
 }
 
 /// Whether `at` lies on the segment from `a` to `b`.
@@ -1774,5 +1828,69 @@ mod tests {
         let theirs = track_from(&[(0, 0), (10, 0)]);
         assert!(!ends_on(&track_from(&[(10, 0), (10, 20)]), &theirs, pads));
         assert!(ends_on(&track_from(&[(5, 0), (10, 20)]), &theirs, pads));
+    }
+
+    #[test]
+    fn a_route_of_a_via_alone_ends_on_the_copper_it_stands_on() {
+        // Growing trees may join two copper of the net crossing on different
+        // layers with a via and no track at all.
+        let pads = [Point::new(10, 0), Point::new(10, 20)];
+        let theirs = track_from(&[(0, 5), (20, 5)]);
+        let via_alone = Routes {
+            tracks: Vec::new(),
+            vias: vec![Via {
+                net: NetId::from_index(0),
+                kind: ViaKindId::from_index(0),
+                position: Point::new(5, 5),
+            }],
+        };
+        assert!(ends_on(&via_alone, &theirs, pads));
+    }
+
+    #[test]
+    fn a_route_grown_off_its_pad_holds_the_routes_still_reaching_the_pad() {
+        // P1 to P2 grows to start on P3's track to P1 instead of on P1: that
+        // track alone reaches P1 then, and must stay.
+        let design = DesignBuilder::new(30.0, 30.0)
+            .smd("P1", Some("A"), at(10.0, 10.0), 1.0, 0)
+            .smd("P2", Some("A"), at(20.0, 10.0), 1.0, 0)
+            .smd("P3", Some("A"), at(10.0, 20.0), 1.0, 0)
+            .build();
+        let pad = |name: &str| design.pad_named(name);
+        let mm = traxide_contracts::testing::mm;
+        let track = |points: &[(f64, f64)]| Routes {
+            tracks: vec![Track {
+                net: NetId::from_index(0),
+                layer: LayerId(0),
+                width: 200_000,
+                path: points
+                    .iter()
+                    .map(|&(x, y)| Point::new(mm(x), mm(y)))
+                    .collect(),
+            }],
+            vias: Vec::new(),
+        };
+        let connection = Connection {
+            net: NetId::from_index(0),
+            from: pad("P1"),
+            to: pad("P2"),
+        };
+        let sides = [vec![0], Vec::new()];
+        let grown_off_p1 = track(&[(10.0, 15.0), (20.0, 10.0)]);
+        let p3_to_p1 = Some(track(&[(10.0, 20.0), (10.0, 10.0)]));
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_off_p1, &sides, &[p3_to_p1]),
+            Some(vec![0])
+        );
+        let p3_off_p1 = Some(track(&[(10.0, 20.0), (15.0, 15.0)]));
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_off_p1, &sides, &[p3_off_p1]),
+            None
+        );
+        let grown_from_p1 = track(&[(10.0, 10.0), (20.0, 10.0)]);
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_from_p1, &sides, &[None]),
+            Some(Vec::new())
+        );
     }
 }
