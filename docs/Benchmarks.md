@@ -58,6 +58,19 @@ Tidying, taking out hops and growing trees searched with vias 4 times as dear as
 
 Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095. Growing trees once more at the end, two-pad nets too, with a heuristic weight of 1 so routes pull tight: 1,084 vias, 0.7 % less track, but 1.3 % more corners and 17 % more time.
 
+## A crossing priced as a whole (M5, TRX-92)
+
+CI's corpus run ([[TRX-91]]) showed CNH (Issue230) with 48 vias where Freerouting takes 5. Taking out hops priced crossing a routed connection per grid edge overlapped, an eighth of a via each: about a via across TokenBoard's 0.2 mm tracks and clearances, but two and more across CNH's 0.25 to 0.64 mm tracks with up to 0.64 mm clearance, so no wide track moved for a hop. A crossing now costs three eighths of a via, spread over the edges it overlaps from both tracks' widths and the clearance between their nets. With `--profile fast`, without a limit, TokenBoard and 28 corpus boards (vias, time):
+
+| Crossing | Vias | Time |
+| --- | --- | --- |
+| an eighth of a via per edge | 1,686 | 616 s |
+| **three eighths of a via** | **1,618** | 944 s |
+| half a via | 1,640 | 832 s |
+| five eighths of a via | 1,650 | 788 s |
+
+CNH 19 instead of 52, 8088sbc 51 instead of 71, Pajalnaja 26 instead of 42, bm07 20 instead of 33, RelayModule 27 instead of 35; Sofle 362 instead of 343, Issue034 97 instead of 82, TokenBoard 258 instead of 252. CNH with the default profile at half a via: 13 vias without a limit instead of 37, 19 within 90 s instead of 48.
+
 ## Connections that meet at a shared pad (M5, TRX-90)
 
 TokenBoard routed with the default profile had two vias on every key column where one would do: the column ran down the front copper, dropped through a via to the back copper's switch pad, and a second via 6 mm on lifted it back. Growing trees left a connection in place once another ended on its copper, and took one that merely started at the same pad for one ending on it. Without that, TokenBoard routes with **221** vias instead of 229 with the default profile, without a limit (48 in hops instead of 70; 12,962 mm of track; Freerouting: 199); with `--profile fast`, TokenBoard and the ten corpus boards with 1,078 instead of 1,090, none with more. Growing trees twice: 1,075, in 3 % more time; not built. Nor built: sparing connections shorter than 10 mm their layer's direction, as around TokenBoard's MCU on the back copper short signals change layers twice where the board's author routes them on one: in one round of the default profile, TokenBoard and the ten corpus boards 999 vias instead of 988 (TokenBoard 235 instead of 233, Issue034 76 instead of 69).

@@ -57,12 +57,15 @@ const TIDYING_VIA_COST: i64 = 10;
 /// 17 % more time; with vias 12 times dearer 1,120 (TRX-88).
 const TIDYING_HEURISTIC_WEIGHT: f64 = 1.5;
 
-/// Taking out hops, crossing a routed connection costs a via divided by
-/// this, however wide the two tracks and the clearance between them: priced
+/// Taking out hops, crossing a routed connection costs this many eighths of
+/// a via, however wide the two tracks and the clearance between them. Priced
 /// per grid edge overlapped instead, at an eighth of a via, crossing
-/// TokenBoard's 0.2 mm tracks cost about a via and CNH's wider ones over two,
-/// so no wide track ever moved for a hop (TRX-87, TRX-92).
-const CROSSINGS_PER_VIA: i64 = 2;
+/// TokenBoard's 0.2 mm tracks cost about a via but CNH's wider ones over two,
+/// so no wide track moved for a hop: CNH kept 52 vias, 19 now. With
+/// `--profile fast`, TokenBoard and 28 corpus boards 1,618 vias instead of
+/// 1,686, in 53 % more time; at half a via 1,640, five eighths 1,650
+/// (TRX-87, TRX-92).
+const CROSSING_EIGHTHS_OF_A_VIA: i64 = 3;
 
 /// The rounds after the first: their prices, as factors of the profile's
 /// price of a via and of running across a layer's direction, and whether
@@ -498,7 +501,7 @@ impl<'a> Router<'a> {
             rip_ups: &no_rip_ups,
             history: &no_history,
             present: Some(search::Present::PerCrossing {
-                price: dearer.via_cost / CROSSINGS_PER_VIA,
+                price: dearer.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
                 nets: &nets,
             }),
         };
