@@ -1314,6 +1314,35 @@ fn a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out() {
 }
 
 #[test]
+fn a_hop_under_a_wide_track_is_taken_out_as_under_a_narrow_one() {
+    // As above, with tracks and clearances three times as wide: crossing B
+    // overlaps it over three times as many grid edges, but is one crossing.
+    let design = DesignBuilder::new(20.0, 20.0)
+        .layers(2)
+        .track_width(0.6)
+        .clearance(0.6)
+        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .tht("B1", Some("B"), at(10.0, 3.0), 1.2)
+        .tht("B2", Some("B"), at(10.0, 17.0), 1.2)
+        .keepout(
+            wall(at(9.0, 0.0), at(11.0, 2.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.0, 18.0), at(11.0, 20.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("B1", "B2"), ("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn a_hop_is_taken_out_where_what_it_passes_finds_room_only_beyond_its_window() {
     // As above, but a wall on the second layer leaves B a way there only
     // round the wall's end, 7 mm off its pads: beyond the 5 mm its window

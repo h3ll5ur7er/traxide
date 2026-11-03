@@ -158,13 +158,26 @@ pub(crate) struct Negotiation<'a> {
     /// How often each connection has been ripped up.
     pub(crate) rip_ups: &'a [u32],
     pub(crate) history: &'a History,
-    /// Negotiating in rounds: what overlapping a routed connection costs this
-    /// round, for each connection overlapped, which may then stay.
-    pub(crate) present: Option<i64>,
+    /// What overlapping routed copper costs when it may then stay, instead of
+    /// being ripped up.
+    pub(crate) present: Option<Present<'a>>,
+}
+
+/// The price of overlapping a routed connection that may stay where it is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Present<'a> {
+    /// Negotiating in rounds: this much for each grid edge and each
+    /// connection overlapped.
+    PerEdge(i64),
+    /// Taking out hops: this much for crossing a connection, of the net
+    /// `nets` gives for it, however wide the two tracks and the clearance
+    /// between them, spread over the edges the crossing overlaps it.
+    PerCrossing { price: i64, nets: &'a [NetId] },
 }
 
 pub(crate) struct Search<'a, L> {
     design: &'a Design,
+    rules: &'a ConstraintSet,
     profile: &'a Profile,
     layout: &'a L,
     net: NetId,
@@ -231,6 +244,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         Self {
             connection,
             design,
+            rules,
             profile,
             layout,
             net: connection.net,
@@ -784,7 +798,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             Obstruction::None => Some(0),
             Obstruction::Fixed => None,
             Obstruction::Routed(connections) if negotiation.present.is_some() => {
-                Some(negotiation.present? * connections.len() as i64)
+                Some(match negotiation.present? {
+                    Present::PerEdge(price) => price * connections.len() as i64,
+                    Present::PerCrossing { price, nets } => connections
+                        .iter()
+                        .map(|c| price * self.profile_pitch() / self.crossing_span(nets[c.index()]))
+                        .sum(),
+                })
             }
             Obstruction::Routed(connections) => {
                 let rip_ups = negotiation.rip_ups;
@@ -798,6 +818,20 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     .sum()
             }
         }
+    }
+
+    /// How far a track of this connection overlaps one of `theirs` it crosses
+    /// at right angles: both widths and the clearance on either side, a grid
+    /// edge at least.
+    fn crossing_span(&self, theirs: NetId) -> i64 {
+        let span = i64::from(self.width)
+            + i64::from(self.rules.track_width(theirs))
+            + 2 * i64::from(self.rules.clearance(Some(self.net), Some(theirs)));
+        span.max(self.profile_pitch())
+    }
+
+    fn profile_pitch(&self) -> i64 {
+        i64::from(self.profile.grid_pitch)
     }
 
     /// Whether no copper, keepout or edge is within reach of a track along any

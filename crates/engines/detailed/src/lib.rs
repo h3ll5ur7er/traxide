@@ -57,16 +57,12 @@ const TIDYING_VIA_COST: i64 = 10;
 /// 17 % more time; with vias 12 times dearer 1,120 (TRX-88).
 const TIDYING_HEURISTIC_WEIGHT: f64 = 1.5;
 
-/// Taking out hops, a grid edge overlapping a routed connection costs this
-/// share of a via: crossing a track overlaps it for some 8 edges at 0.1 mm,
-/// so a crossing costs about one via. On TokenBoard a quarter of a via per
-/// edge left 379 vias of 446, a sixteenth 405, half a via 428: crossed
-/// cheaply, more tracks had to move, and fewer of them found room again
-/// (TRX-76). Since what is crossed finds room further off (CROSSED_ROOM), an
-/// eighth pays: with `--profile fast` TokenBoard and ten corpus boards
-/// together 1,355 vias instead of 1,492, a twelfth 1,362, a sixteenth 1,390,
-/// half a via 1,659 (TRX-87).
-const CROSSING_EDGES_PER_VIA: i64 = 8;
+/// Taking out hops, crossing a routed connection costs a via divided by
+/// this, however wide the two tracks and the clearance between them: priced
+/// per grid edge overlapped instead, at an eighth of a via, crossing
+/// TokenBoard's 0.2 mm tracks cost about a via and CNH's wider ones over two,
+/// so no wide track ever moved for a hop (TRX-87, TRX-92).
+const CROSSINGS_PER_VIA: i64 = 2;
 
 /// The rounds after the first: their prices, as factors of the profile's
 /// price of a via and of running across a layer's direction, and whether
@@ -497,10 +493,14 @@ impl<'a> Router<'a> {
         };
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
+        let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
         let crossing = search::Negotiation {
             rip_ups: &no_rip_ups,
             history: &no_history,
-            present: Some(dearer.via_cost / CROSSING_EDGES_PER_VIA),
+            present: Some(search::Present::PerCrossing {
+                price: dearer.via_cost / CROSSINGS_PER_VIA,
+                nets: &nets,
+            }),
         };
         let fewest_of: Vec<usize> = plan
             .connections
@@ -834,7 +834,7 @@ impl<'a> Router<'a> {
                 let negotiation = search::Negotiation {
                     rip_ups: &no_rip_ups,
                     history: &state.history,
-                    present: Some(present),
+                    present: Some(search::Present::PerEdge(present)),
                 };
                 let found = self.find_all(&batch, plan, corridors, layout, Some(negotiation));
                 for (id, found) in batch.iter().copied().zip(found) {
