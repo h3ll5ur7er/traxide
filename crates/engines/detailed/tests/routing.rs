@@ -677,6 +677,45 @@ fn without_rip_up_a_connection_shoves_one_in_its_only_way_to_another() {
 }
 
 #[test]
+fn a_shoved_connection_shoves_another_in_turn() {
+    // On the first layer a wall leaves two gaps, at the top and in the
+    // middle, each wide enough for one track; on the second, one gap at the
+    // bottom. Z's through-hole pads take the middle gap first, Y the top one;
+    // X and Y have pads on the first layer only, and there are no vias. X
+    // shoves Y to the middle gap, and Y shoves Z on to the second layer.
+    let walls = [
+        (wall(at(9.5, 0.0), at(10.5, 15.8)), 0),
+        (wall(at(9.5, 16.2), at(10.5, 28.3)), 0),
+        (wall(at(9.5, 28.7), at(10.5, 30.0)), 0),
+        (wall(at(9.5, 0.0), at(10.5, 6.8)), 1),
+        (wall(at(9.5, 7.2), at(10.5, 30.0)), 1),
+    ];
+    let mut builder = DesignBuilder::new(20.0, 30.0).layers(2).without_vias();
+    for (shape, layer) in walls {
+        builder = builder.keepout(shape, Some(layer), KeepoutScope::Everything);
+    }
+    let design = builder
+        .tht("Z1", Some("Z"), at(2.0, 17.0), 0.6)
+        .tht("Z2", Some("Z"), at(18.0, 17.0), 0.6)
+        .smd("Y1", Some("Y"), at(2.0, 26.0), 0.4, 0)
+        .smd("Y2", Some("Y"), at(18.0, 26.0), 0.4, 0)
+        .smd("X1", Some("X"), at(2.0, 28.5), 0.4, 0)
+        .smd("X2", Some("X"), at(18.0, 28.5), 0.4, 0)
+        .build();
+    let without_rip_up = Profile {
+        max_rip_ups: 0,
+        ..short_detours()
+    };
+    let result = route_with(
+        &design,
+        &without_rip_up,
+        &[("Z1", "Z2"), ("Y1", "Y2"), ("X1", "X2")],
+    );
+    assert_eq!(result.unrouted, []);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn says_which_connection_ripped_up_which_and_where_they_met() {
     // Y takes the top gap first; X can reach no other and rips it up there.
     let design = two_gaps();

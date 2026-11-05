@@ -100,6 +100,11 @@ const CROSSED_ROOM: i32 = 6;
 /// 979, in 8 % more; a fifth takes out none on TokenBoard (TRX-87).
 const MOST_HOP_PASSES: usize = 4;
 
+/// How deep a shove pushes: what moves aside for a connection that
+/// negotiation left unrouted may push what is in its way in turn, and so on,
+/// this many connections deep (TRX-37).
+const SHOVE_DEPTH: usize = 2;
+
 /// Past its deadline, routing searches for what is still queued for this
 /// share of the time it was given more, a second at least, and leaves the
 /// rest unrouted: LogicBoard's searches without rip-up took up to 43 s past a
@@ -485,7 +490,17 @@ impl<'a> Router<'a> {
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
-        let crossing = crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets);
+        let nothing_held = vec![false; attempt.routed.len()];
+        let crossing =
+            crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets, &nothing_held);
+        let mover = Mover {
+            room_finder: &room_finder,
+            plan,
+            profile: &dearer,
+            no_rip_ups: &no_rip_ups,
+            no_history: &no_history,
+            nets: &nets,
+        };
         let deadline = self.deadline;
         let scratch = &mut self.scratches[0];
         let mut still_unrouted = Vec::new();
@@ -499,15 +514,18 @@ impl<'a> Router<'a> {
                 still_unrouted.push(id);
                 continue;
             };
-            let Some(moved) = move_aside(
-                &room_finder,
+            let (mut held, mut touched) = (nothing_held.clone(), Vec::new());
+            let moved = mover.move_aside(
                 scratch,
-                plan,
-                &attempt.routed,
                 layout,
                 id,
                 &found,
-            ) else {
+                SHOVE_DEPTH,
+                &mut held,
+                &mut touched,
+            );
+            let Some(moved) = moved else {
+                undo(layout, &attempt.routed, &touched);
                 still_unrouted.push(id);
                 continue;
             };
@@ -568,7 +586,17 @@ impl<'a> Router<'a> {
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
-        let crossing = crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets);
+        let nothing_held = vec![false; attempt.routed.len()];
+        let crossing =
+            crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets, &nothing_held);
+        let mover = Mover {
+            room_finder: &room_finder,
+            plan,
+            profile: &dearer,
+            no_rip_ups: &no_rip_ups,
+            no_history: &no_history,
+            nets: &nets,
+        };
         let fewest_of: Vec<usize> = plan
             .connections
             .iter()
@@ -606,16 +634,12 @@ impl<'a> Router<'a> {
                 layout.add_route(id, &routes);
                 continue;
             };
-            let Some(rerouted) = move_aside(
-                &room_finder,
-                scratch,
-                plan,
-                &attempt.routed,
-                layout,
-                id,
-                &moved,
-            ) else {
-                layout.add_route(id, &routes);
+            // One deep: what a hop passes under moves without pushing others.
+            let (mut held, mut touched) = (nothing_held.clone(), Vec::new());
+            let rerouted =
+                mover.move_aside(scratch, layout, id, &moved, 1, &mut held, &mut touched);
+            let Some(rerouted) = rerouted else {
+                undo(layout, &attempt.routed, &touched);
                 continue;
             };
             let vias_of = |routed: &Option<Routes>| routed.as_ref().map_or(0, |r| r.vias.len());
@@ -640,14 +664,7 @@ impl<'a> Router<'a> {
                     attempt.routed[other.index()] = Some(route);
                 }
             } else {
-                layout.remove_route(id);
-                layout.add_route(id, &routes);
-                for (other, _) in &rerouted {
-                    layout.remove_route(*other);
-                    if let Some(theirs) = &attempt.routed[other.index()] {
-                        layout.add_route(*other, theirs);
-                    }
-                }
+                undo(layout, &attempt.routed, &touched);
             }
         }
         moved_areas
@@ -1313,6 +1330,7 @@ fn crossing_moved_aside<'a>(
     rip_ups: &'a [u32],
     history: &'a history::History,
     nets: &'a [NetId],
+    held: &'a [bool],
 ) -> search::Negotiation<'a> {
     search::Negotiation {
         rip_ups,
@@ -1320,52 +1338,98 @@ fn crossing_moved_aside<'a>(
         present: Some(search::Present::PerCrossing {
             price: profile.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
             nets,
+            held,
         }),
     }
 }
 
-/// Puts `found`, a way for connection `id` that may cross routed connections,
-/// into `layout`, where `id` has no route, and routes each connection it
-/// crosses once more among the rest without crossing them: the new routes of
-/// those, `layout` holding them; or `None` where one finds no way, `layout`
-/// as it was.
-fn move_aside(
-    room_finder: &Finder,
-    scratch: &mut search::Scratch,
-    plan: &Plan,
-    routed: &[Option<Routes>],
-    layout: &mut impl LayoutAccess,
-    id: ConnectionId,
-    found: &Routes,
-) -> Option<Vec<(ConnectionId, Routes)>> {
-    let crossed = routed_obstructions(layout, found);
-    for &other in &crossed {
-        layout.remove_route(other);
-    }
-    layout.add_route(id, found);
-    let mut moved = Vec::new();
-    for &other in &crossed {
-        let connection = plan.connections[other.index()];
-        match room_finder.search(scratch, connection, layout, None, None) {
-            Ok(route) => {
+/// What moving routed connections aside searches with: `room_finder` for
+/// what is crossed, with vias as dear as for the move's own way and looking
+/// CROSSED_ROOM times as far; and what crossing costs (`crossing_moved_aside`).
+struct Mover<'f, 'a> {
+    room_finder: &'f Finder<'a>,
+    plan: &'f Plan,
+    profile: &'f Profile,
+    no_rip_ups: &'f [u32],
+    no_history: &'f history::History,
+    nets: &'f [NetId],
+}
+
+impl Mover<'_, '_> {
+    /// Puts `found`, a way for connection `id` that may cross routed
+    /// connections, into `layout`, where `id` has no route, and routes each
+    /// connection it crosses once more around it: among the rest without
+    /// crossing them, or, while `depth` allows, crossing others, which move
+    /// aside so in turn. It never crosses what `held` holds, the connections
+    /// this move has placed already. Gives the connections moved with their
+    /// new routes, or `None` where one finds no way; `touched` names every
+    /// connection whose copper changed, for `undo`.
+    #[allow(clippy::too_many_arguments)]
+    fn move_aside(
+        &self,
+        scratch: &mut search::Scratch,
+        layout: &mut impl LayoutAccess,
+        id: ConnectionId,
+        found: &Routes,
+        depth: usize,
+        held: &mut [bool],
+        touched: &mut Vec<ConnectionId>,
+    ) -> Option<Vec<(ConnectionId, Routes)>> {
+        let crossed = routed_obstructions(layout, found);
+        for &other in &crossed {
+            layout.remove_route(other);
+            touched.push(other);
+        }
+        layout.add_route(id, found);
+        touched.push(id);
+        held[id.index()] = true;
+        let mut moved = Vec::new();
+        for &other in &crossed {
+            let connection = self.plan.connections[other.index()];
+            if let Ok(route) = self
+                .room_finder
+                .search(scratch, connection, layout, None, None)
+            {
                 layout.add_route(other, &route);
+                held[other.index()] = true;
                 moved.push((other, route));
+                continue;
             }
-            Err(_) => {
-                for (done, _) in &moved {
-                    layout.remove_route(*done);
-                }
-                layout.remove_route(id);
-                for &other in &crossed {
-                    if let Some(theirs) = &routed[other.index()] {
-                        layout.add_route(other, theirs);
-                    }
-                }
+            if depth <= 1 {
                 return None;
             }
+            let held_now = held.to_vec();
+            let crossing = crossing_moved_aside(
+                self.profile,
+                self.no_rip_ups,
+                self.no_history,
+                self.nets,
+                &held_now,
+            );
+            let route = self
+                .room_finder
+                .search(scratch, connection, layout, Some(crossing), None)
+                .ok()?;
+            let pushed =
+                self.move_aside(scratch, layout, other, &route, depth - 1, held, touched)?;
+            moved.push((other, route));
+            moved.extend(pushed);
+        }
+        Some(moved)
+    }
+}
+
+/// Takes back a move of routed connections: each connection in `touched`
+/// routes again as `routed` has it, or not at all.
+fn undo(layout: &mut impl LayoutAccess, routed: &[Option<Routes>], touched: &[ConnectionId]) {
+    for &connection in touched {
+        layout.remove_route(connection);
+    }
+    for &connection in touched {
+        if let Some(routes) = &routed[connection.index()] {
+            layout.add_route(connection, routes);
         }
     }
-    Some(moved)
 }
 
 /// The connections of connection `i`'s net joined, by routed connections

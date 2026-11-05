@@ -15,7 +15,9 @@ Negotiation rips up what is in a connection's way and leaves it unrouted until i
 - [x] A failing test: without rip-up, a connection shoves one in its only way to another (`without_rip_up_a_connection_shoves_one_in_its_only_way_to_another`)
 - [x] Repair after negotiation, one level deep: each connection left unrouted searches once more crossing routed connections at a price for each crossing, and what its way crosses routes again around it; it routes if all of them do (`shove_aside_for_unrouted`, `move_aside`, shared with taking out hops). Two tests whose blocked connection could now be shoved make what blocks it unable to move
 - [ ] Completion gain measured on the corpus
-- [ ] Deeper shoves: what moves aside may push others in turn, to a bounded depth
+- [x] A failing test: a shoved connection shoves another in turn (`a_shoved_connection_shoves_another_in_turn`)
+- [x] Deeper shoves: what moves aside may cross others in turn, which move aside so too, to `SHOVE_DEPTH` (2); what the move has placed already is held and never crossed (`search::Present::PerCrossing::held`), and a failed move is taken back whole (`undo`). Taking out hops stays one deep, its results the same
+- [ ] On bm05 (90 s) neither depth routes more: of its four connections left unrouted, the ways found cross what is in them, which then finds no way round the held new copper, or none out of U27's fine-pitch pads; one, two deep 50 of 54 nets as before. Pushing a track sideways, keeping its course, is what these need (walkaround, below)
 - [ ] Walkaround of octilinear segments: what is crossed moves beside the new way, keeping its course, instead of being searched again
 
 **Depends on:** [[TRX-27]]

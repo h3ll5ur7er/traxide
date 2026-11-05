@@ -169,10 +169,15 @@ pub(crate) enum Present<'a> {
     /// Negotiating in rounds: this much for each grid edge and each
     /// connection overlapped.
     PerEdge(i64),
-    /// Taking out hops: this much for crossing a connection, of the net
-    /// `nets` gives for it, however wide the two tracks and the clearance
-    /// between them, spread over the edges the crossing overlaps it.
-    PerCrossing { price: i64, nets: &'a [NetId] },
+    /// Moving what is crossed aside: this much for crossing a connection, of
+    /// the net `nets` gives for it, however wide the two tracks and the
+    /// clearance between them, spread over the edges the crossing overlaps
+    /// it; never crossing one that `held` holds.
+    PerCrossing {
+        price: i64,
+        nets: &'a [NetId],
+        held: &'a [bool],
+    },
 }
 
 pub(crate) struct Search<'a, L> {
@@ -800,10 +805,17 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             Obstruction::Routed(connections) if negotiation.present.is_some() => {
                 Some(match negotiation.present? {
                     Present::PerEdge(price) => price * connections.len() as i64,
-                    Present::PerCrossing { price, nets } => connections
-                        .iter()
-                        .map(|c| price * self.profile_pitch() / self.crossing_span(nets[c.index()]))
-                        .sum(),
+                    Present::PerCrossing { price, nets, held } => {
+                        if connections.iter().any(|c| held[c.index()]) {
+                            return None;
+                        }
+                        connections
+                            .iter()
+                            .map(|c| {
+                                price * self.profile_pitch() / self.crossing_span(nets[c.index()])
+                            })
+                            .sum()
+                    }
                 })
             }
             Obstruction::Routed(connections) => {
