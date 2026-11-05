@@ -105,6 +105,12 @@ const MOST_HOP_PASSES: usize = 4;
 /// this many connections deep (TRX-37).
 const SHOVE_DEPTH: usize = 2;
 
+/// Of the time routing is given, negotiation takes this many fifths, and
+/// leaves the rest to shoving what is in the way of what it left unrouted,
+/// and to tidying: on a board that reaches its limit, negotiation would
+/// otherwise take it all (TRX-37).
+const NEGOTIATING_FIFTHS: u32 = 4;
+
 /// Past its deadline, routing searches for what is still queued for this
 /// share of the time it was given more, a second at least, and leaves the
 /// rest unrouted: LogicBoard's searches without rip-up took up to 43 s past a
@@ -121,6 +127,9 @@ pub struct Router<'a> {
     deadline: Option<Instant>,
     /// When it stops searching (SEARCHING_PAST_THE_DEADLINE).
     searching_ends: Option<Instant>,
+    /// When negotiation stops ripping up, leaving the rest of the time to
+    /// what comes after it (NEGOTIATING_FIFTHS).
+    negotiation_ends: Option<Instant>,
     /// Whether the board's own copper cuts each connection asked about off,
     /// which no routing changes: a search for one cut off floods all it can
     /// reach, again on every attempt.
@@ -148,22 +157,32 @@ impl<'a> Router<'a> {
             scratches: vec![search::Scratch::default()],
             deadline: None,
             searching_ends: None,
+            negotiation_ends: None,
             cut_off: HashMap::new(),
         }
     }
 
     /// Searches the connections of a batch on up to `threads` threads. The
     /// routes are the same on any number of them.
-    /// Stops negotiation at `deadline`: what is still queued then routes once
-    /// more without crossing anything, each in its own window only, so routing
-    /// ends a little later: a tenth of the time given at most, or a second
-    /// (SEARCHING_PAST_THE_DEADLINE).
+    /// Stops negotiation at four fifths of the time to `deadline`
+    /// (NEGOTIATING_FIFTHS): what is still queued then routes once more
+    /// without crossing anything, each in its own window only, and what is
+    /// left unrouted is shoved for, and the routes tidied, until `deadline`.
+    /// Searching for what is queued ends a little later at most: a tenth of
+    /// the time given, or a second (SEARCHING_PAST_THE_DEADLINE).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
-        let given = deadline.saturating_duration_since(Instant::now());
+        let now = Instant::now();
+        let given = deadline.saturating_duration_since(now);
         let past = (given / SEARCHING_PAST_THE_DEADLINE).max(LEAST_SEARCHING_PAST_THE_DEADLINE);
         self.deadline = Some(deadline);
         self.searching_ends = Some(deadline + past);
+        self.negotiation_ends = Some(negotiation_ends(now, deadline));
         self
+    }
+
+    fn is_past_negotiation(&self) -> bool {
+        self.negotiation_ends
+            .is_some_and(|ends| Instant::now() >= ends)
     }
 
     fn is_past_deadline(&self) -> bool {
@@ -230,7 +249,7 @@ impl<'a> Router<'a> {
         let mut best = self.route_side_by_side(&all_ways, plan, corridors, layout, cancel, events);
         let later = LATER_ROUNDS.iter().take(rounds - 1);
         for (round, &(dearer_vias, layers, as_is)) in (2..).zip(later) {
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_negotiation() {
                 break;
             }
             events.publish(Event::RoundStarted { round, of });
@@ -356,6 +375,7 @@ impl<'a> Router<'a> {
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
             searching_ends: self.searching_ends,
+            negotiation_ends: self.negotiation_ends,
             cut_off: self.cut_off.clone(),
         }
     }
@@ -375,7 +395,7 @@ impl<'a> Router<'a> {
         let mut best = if first.unrouted.is_empty()
             || self.finder.profile.max_rip_ups == 0
             || cancel.is_cancelled()
-            || self.is_past_deadline()
+            || self.is_past_negotiation()
         {
             first
         } else {
@@ -839,7 +859,7 @@ impl<'a> Router<'a> {
                 unrouted.extend(state.queue.drain(..));
                 break;
             }
-            if self.is_past_deadline() {
+            if self.is_past_negotiation() {
                 state.may_rip_up = false;
             }
             let batch = self.next_batch(&mut state.queue, plan, corridors);
@@ -865,8 +885,8 @@ impl<'a> Router<'a> {
             // the copper of a connection searched beside it.
             for id in no_way {
                 let connection = plan.connections[id.index()];
-                // Past the deadline no time is left for searches up to the whole board.
-                if self.is_past_deadline() {
+                // Past negotiation no time is left for searches up to the whole board.
+                if self.is_past_negotiation() {
                     unrouted.push(id);
                     continue;
                 }
@@ -919,7 +939,7 @@ impl<'a> Router<'a> {
         let mut failed = Vec::new();
         let (mut fewest_overlapping, mut rounds_without_gain) = (usize::MAX, 0);
         loop {
-            while !state.queue.is_empty() && !cancel.is_cancelled() && !self.is_past_deadline() {
+            while !state.queue.is_empty() && !cancel.is_cancelled() && !self.is_past_negotiation() {
                 let batch = self.next_batch(&mut state.queue, plan, corridors);
                 let negotiation = search::Negotiation {
                     rip_ups: &no_rip_ups,
@@ -951,7 +971,7 @@ impl<'a> Router<'a> {
                     }
                 }
             }
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_negotiation() {
                 break;
             }
             let overlapping: Vec<ConnectionId> = (0..total)
@@ -1320,6 +1340,12 @@ impl Finder<'_> {
             self.rules.track_width(connection.net),
         )
     }
+}
+
+/// When negotiation stops, given until `deadline` from `now`
+/// (NEGOTIATING_FIFTHS).
+fn negotiation_ends(now: Instant, deadline: Instant) -> Instant {
+    now + deadline.saturating_duration_since(now) * NEGOTIATING_FIFTHS / 5
 }
 
 /// Crossing routed connections at CROSSING_EIGHTHS_OF_A_VIA of a via of
@@ -2080,5 +2106,16 @@ mod tests {
             holding_pads_left(&design, connection, &grown_from_p1, &sides, &[None]),
             Some(Vec::new())
         );
+    }
+
+    #[test]
+    fn negotiation_leaves_a_fifth_of_the_time_given_to_shoving_and_tidying() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert_eq!(
+            negotiation_ends(now, deadline),
+            now + Duration::from_secs(8)
+        );
+        assert_eq!(negotiation_ends(deadline, now), deadline);
     }
 }
