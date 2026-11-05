@@ -2,7 +2,7 @@
 id: TRX-88
 title: Dearer vias and a cheaper estimate while tidying
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

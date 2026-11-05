@@ -2,7 +2,7 @@
 id: TRX-81
 title: A built-in fast profile that routes once
 type: improvement
-status: in-progress
+status: done
 assignee: claude
 priority: medium
 labels: [profiles]

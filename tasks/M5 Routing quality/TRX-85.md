@@ -2,7 +2,7 @@
 id: TRX-85
 title: What a hop's way crosses finds room further off
 type: improvement
-status: in-progress
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

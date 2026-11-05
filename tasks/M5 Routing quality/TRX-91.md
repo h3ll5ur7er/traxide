@@ -2,7 +2,7 @@
 id: TRX-91
 title: The corpus counts each router's vias and track
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [benchmarks]

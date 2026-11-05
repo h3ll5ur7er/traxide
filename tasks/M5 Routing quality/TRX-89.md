@@ -2,7 +2,7 @@
 id: TRX-89
 title: Routing past its deadline stops searching after a tenth of the time given
 type: bug
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

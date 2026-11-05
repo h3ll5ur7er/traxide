@@ -2,7 +2,7 @@
 id: TRX-84
 title: Route in more rounds at other prices where time is left
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing, profiles]

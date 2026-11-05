@@ -2,7 +2,7 @@
 id: TRX-93
 title: Growing trees leaves no pad and no via without its copper
 type: bug
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

@@ -2,7 +2,7 @@
 id: TRX-86
 title: The default routes in six rounds
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [profiles]

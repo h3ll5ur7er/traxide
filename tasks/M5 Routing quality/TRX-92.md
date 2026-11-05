@@ -2,7 +2,7 @@
 id: TRX-92
 title: Taking out hops prices a crossing as a whole, however wide the tracks
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]
