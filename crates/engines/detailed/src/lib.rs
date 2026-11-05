@@ -387,6 +387,9 @@ impl<'a> Router<'a> {
             }
         };
         if !cancel.is_cancelled() && !self.is_past_deadline() {
+            if !best.unrouted.is_empty() {
+                self.shove_aside_for_unrouted(&mut best, plan, layout, cancel);
+            }
             self.tidy(&mut best, plan, layout, cancel);
             let mut changed = None;
             for _ in 0..MOST_HOP_PASSES {
@@ -457,13 +460,89 @@ impl<'a> Router<'a> {
         }
     }
 
+    /// Routes each connection that negotiation left unrouted once more,
+    /// crossing routed connections at a price for each crossing, and moves
+    /// what its way crosses aside (`move_aside`): it routes then if all of
+    /// them still route. Negotiation rips up what is in a connection's way
+    /// and leaves it unrouted until it routes again, and gives up after so
+    /// many rip-ups; this moves nothing unless it routes elsewhere (TRX-37).
+    fn shove_aside_for_unrouted(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let (dearer, roomier) = self.moving_profiles();
+        let finder = Finder {
+            profile: &dearer,
+            ..self.finder
+        };
+        let room_finder = Finder {
+            profile: &roomier,
+            ..self.finder
+        };
+        let no_history = history::History::new(self.finder.design, 0);
+        let no_rip_ups = vec![0; attempt.routed.len()];
+        let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
+        let crossing = crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets);
+        let deadline = self.deadline;
+        let scratch = &mut self.scratches[0];
+        let mut still_unrouted = Vec::new();
+        for id in std::mem::take(&mut attempt.unrouted) {
+            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+                still_unrouted.push(id);
+                continue;
+            }
+            let connection = plan.connections[id.index()];
+            let Ok(found) = finder.search(scratch, connection, layout, Some(crossing), None) else {
+                still_unrouted.push(id);
+                continue;
+            };
+            let Some(moved) = move_aside(
+                &room_finder,
+                scratch,
+                plan,
+                &attempt.routed,
+                layout,
+                id,
+                &found,
+            ) else {
+                still_unrouted.push(id);
+                continue;
+            };
+            for (other, route) in moved {
+                attempt.routed[other.index()] = Some(route);
+            }
+            attempt.routed[id.index()] = Some(found);
+        }
+        attempt.unrouted = still_unrouted;
+    }
+
+    /// The profiles of the stages that move routed copper: vias
+    /// TIDYING_VIA_COST times dearer, and as such, searching CROSSED_ROOM
+    /// times as far beyond the pads, for what moves aside.
+    fn moving_profiles(&self) -> (Profile, Profile) {
+        let dearer = Profile {
+            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
+            ..self.finder.profile.clone()
+        };
+        let roomier = Profile {
+            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
+            ..dearer.clone()
+        };
+        (dearer, roomier)
+    }
+
     /// Takes out the vias of each routed connection that changes layers more
     /// often than it must, where moving the copper it passes makes room.
     /// Tidying searched it among the rest crossing nothing; now it may cross
-    /// routed connections at a price for each grid edge it overlaps them, with vias as dear as
-    /// tidying makes them, and takes the way found if it has fewer vias. What
-    /// it crosses routes again among the rest, crossing nothing. The change
-    /// stays only if all of them route and their vias together fall: a hop
+    /// routed connections at a price for each crossing
+    /// (CROSSING_EIGHTHS_OF_A_VIA), with vias as dear as tidying makes them,
+    /// and takes the way found if it has fewer vias. What it crosses moves
+    /// aside (`move_aside`). The change stays only if all of them route and
+    /// their vias together fall: a hop
     /// under a track that could run elsewhere goes, a hop under a track that
     /// must stay where it is stays. Where `near` is given, only connections
     /// whose window meets one of its areas are tried: elsewhere nothing
@@ -477,18 +556,10 @@ impl<'a> Router<'a> {
         near: Option<&[Rect]>,
         cancel: &CancelToken,
     ) -> Vec<Rect> {
-        let dearer = Profile {
-            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
-            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
-            ..self.finder.profile.clone()
-        };
+        let (dearer, roomier) = self.moving_profiles();
         let finder = Finder {
             profile: &dearer,
             ..self.finder
-        };
-        let roomier = Profile {
-            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
-            ..dearer.clone()
         };
         let room_finder = Finder {
             profile: &roomier,
@@ -497,14 +568,7 @@ impl<'a> Router<'a> {
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
-        let crossing = search::Negotiation {
-            rip_ups: &no_rip_ups,
-            history: &no_history,
-            present: Some(search::Present::PerCrossing {
-                price: dearer.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
-                nets: &nets,
-            }),
-        };
+        let crossing = crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets);
         let fewest_of: Vec<usize> = plan
             .connections
             .iter()
@@ -542,49 +606,46 @@ impl<'a> Router<'a> {
                 layout.add_route(id, &routes);
                 continue;
             };
-            let crossed = routed_obstructions(layout, &moved);
-            for &other in &crossed {
-                layout.remove_route(other);
-            }
-            layout.add_route(id, &moved);
-            let mut rerouted = Vec::new();
-            for &other in &crossed {
-                let connection = plan.connections[other.index()];
-                match room_finder.search(scratch, connection, layout, None, None) {
-                    Ok(route) => {
-                        layout.add_route(other, &route);
-                        rerouted.push(route);
-                    }
-                    Err(_) => break,
-                }
-            }
+            let Some(rerouted) = move_aside(
+                &room_finder,
+                scratch,
+                plan,
+                &attempt.routed,
+                layout,
+                id,
+                &moved,
+            ) else {
+                layout.add_route(id, &routes);
+                continue;
+            };
             let vias_of = |routed: &Option<Routes>| routed.as_ref().map_or(0, |r| r.vias.len());
             let before = routes.vias.len()
-                + crossed
-                    .iter()
-                    .map(|other| vias_of(&attempt.routed[other.index()]))
+                + (rerouted.iter())
+                    .map(|(other, _)| vias_of(&attempt.routed[other.index()]))
                     .sum::<usize>();
-            let after =
-                moved.vias.len() + rerouted.iter().map(|route| route.vias.len()).sum::<usize>();
-            if rerouted.len() == crossed.len() && after < before {
+            let after = moved.vias.len()
+                + rerouted
+                    .iter()
+                    .map(|(_, route)| route.vias.len())
+                    .sum::<usize>();
+            if after < before {
                 let old = std::iter::once(&routes).chain(
-                    crossed
-                        .iter()
-                        .filter_map(|other| attempt.routed[other.index()].as_ref()),
+                    (rerouted.iter())
+                        .filter_map(|(other, _)| attempt.routed[other.index()].as_ref()),
                 );
-                let new = std::iter::once(&moved).chain(&rerouted);
+                let new = std::iter::once(&moved).chain(rerouted.iter().map(|(_, route)| route));
                 moved_areas.extend(old.chain(new).filter_map(copper_bounds));
                 attempt.routed[i] = Some(moved);
-                for (other, route) in crossed.into_iter().zip(rerouted) {
+                for (other, route) in rerouted {
                     attempt.routed[other.index()] = Some(route);
                 }
             } else {
                 layout.remove_route(id);
                 layout.add_route(id, &routes);
-                for &other in &crossed {
-                    layout.remove_route(other);
+                for (other, _) in &rerouted {
+                    layout.remove_route(*other);
                     if let Some(theirs) = &attempt.routed[other.index()] {
-                        layout.add_route(other, theirs);
+                        layout.add_route(*other, theirs);
                     }
                 }
             }
@@ -1242,6 +1303,69 @@ impl Finder<'_> {
             self.rules.track_width(connection.net),
         )
     }
+}
+
+/// Crossing routed connections at CROSSING_EIGHTHS_OF_A_VIA of a via of
+/// `profile` each, whatever their rip-ups and history, as what is crossed
+/// moves aside then.
+fn crossing_moved_aside<'a>(
+    profile: &Profile,
+    rip_ups: &'a [u32],
+    history: &'a history::History,
+    nets: &'a [NetId],
+) -> search::Negotiation<'a> {
+    search::Negotiation {
+        rip_ups,
+        history,
+        present: Some(search::Present::PerCrossing {
+            price: profile.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
+            nets,
+        }),
+    }
+}
+
+/// Puts `found`, a way for connection `id` that may cross routed connections,
+/// into `layout`, where `id` has no route, and routes each connection it
+/// crosses once more among the rest without crossing them: the new routes of
+/// those, `layout` holding them; or `None` where one finds no way, `layout`
+/// as it was.
+fn move_aside(
+    room_finder: &Finder,
+    scratch: &mut search::Scratch,
+    plan: &Plan,
+    routed: &[Option<Routes>],
+    layout: &mut impl LayoutAccess,
+    id: ConnectionId,
+    found: &Routes,
+) -> Option<Vec<(ConnectionId, Routes)>> {
+    let crossed = routed_obstructions(layout, found);
+    for &other in &crossed {
+        layout.remove_route(other);
+    }
+    layout.add_route(id, found);
+    let mut moved = Vec::new();
+    for &other in &crossed {
+        let connection = plan.connections[other.index()];
+        match room_finder.search(scratch, connection, layout, None, None) {
+            Ok(route) => {
+                layout.add_route(other, &route);
+                moved.push((other, route));
+            }
+            Err(_) => {
+                for (done, _) in &moved {
+                    layout.remove_route(*done);
+                }
+                layout.remove_route(id);
+                for &other in &crossed {
+                    if let Some(theirs) = &routed[other.index()] {
+                        layout.add_route(other, theirs);
+                    }
+                }
+                return None;
+            }
+        }
+    }
+    Some(moved)
 }
 
 /// The connections of connection `i`'s net joined, by routed connections
