@@ -158,13 +158,26 @@ pub(crate) struct Negotiation<'a> {
     /// How often each connection has been ripped up.
     pub(crate) rip_ups: &'a [u32],
     pub(crate) history: &'a History,
-    /// Negotiating in rounds: what overlapping a routed connection costs this
-    /// round, for each connection overlapped, which may then stay.
-    pub(crate) present: Option<i64>,
+    /// What overlapping routed copper costs when it may then stay, instead of
+    /// being ripped up.
+    pub(crate) present: Option<Present<'a>>,
+}
+
+/// The price of overlapping a routed connection that may stay where it is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Present<'a> {
+    /// Negotiating in rounds: this much for each grid edge and each
+    /// connection overlapped.
+    PerEdge(i64),
+    /// Taking out hops: this much for crossing a connection, of the net
+    /// `nets` gives for it, however wide the two tracks and the clearance
+    /// between them, spread over the edges the crossing overlaps it.
+    PerCrossing { price: i64, nets: &'a [NetId] },
 }
 
 pub(crate) struct Search<'a, L> {
     design: &'a Design,
+    rules: &'a ConstraintSet,
     profile: &'a Profile,
     layout: &'a L,
     net: NetId,
@@ -202,7 +215,7 @@ pub(crate) struct Search<'a, L> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Directions {
     /// What a straight step across its layer's direction costs beyond its
-    /// length, in thousandths of it; a diagonal step pays half. Zero: none.
+    /// length, in thousandths of it; a diagonal step pays as much. Zero: none.
     pub(crate) against_per_mille: i64,
     /// The layers whose tracks run horizontally, by bit; the others' run
     /// vertically.
@@ -231,6 +244,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         Self {
             connection,
             design,
+            rules,
             profile,
             layout,
             net: connection.net,
@@ -265,15 +279,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     }
 
     /// What a step of `length` by (dx, dy) on `layer` costs for running
-    /// across the layer's direction.
+    /// across the layer's direction, a diagonal step as much as one straight
+    /// across: diagonals paying half ran long across the keys of TokenBoard
+    /// and cost 4 % more vias on the corpus boards (TRX-82).
     fn against_direction(&self, layer: u32, (dx, dy): (i32, i32), length: i64) -> i64 {
-        let share = self.directions.against_per_mille;
-        if share == 0 {
-            0
-        } else if dx != 0 && dy != 0 {
-            length * share / 2000
-        } else if (dy != 0) == self.directions.is_horizontal(layer) {
-            length * share / 1000
+        let diagonal = dx != 0 && dy != 0;
+        if diagonal || (dy != 0) == self.directions.is_horizontal(layer) {
+            length * self.directions.against_per_mille / 1000
         } else {
             0
         }
@@ -290,7 +302,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         };
         let share = self.directions.against_per_mille;
         let pitch = i64::from(self.profile.grid_pitch);
-        let diagonal = |n: i64| n * self.diagonal / pitch * (2000 + share) / 2000;
+        let diagonal = |n: i64| n * self.diagonal / pitch * (1000 + share) / 1000;
         let across_cost = |n: i64| n * (1000 + share) / 1000;
         let straight = along + across_cost(across);
         let with_diagonal = if along >= across {
@@ -516,6 +528,16 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             if let Some(finish) = scratch.finish.get(self.layer_node(state)) {
                 relax(None, finish, None, scratch);
             }
+            // Whether a step to `next` costing at least `step_cost` cannot
+            // lower its cost: what fits costs nothing less, so finding out
+            // whether a track or via fits there would be wasted.
+            let cannot_improve = |next: State, step_cost: i64, scratch: &Scratch| {
+                cost + step_cost
+                    >= scratch
+                        .best
+                        .get(self.slot(next) as usize)
+                        .unwrap_or(i64::MAX)
+            };
             let is_open_around = scratch
                 .open_around
                 .get_or_insert_with(self.layer_node(state), || self.is_open_around(state));
@@ -524,6 +546,22 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 let next = (state.node.0 + dx, state.node.1 + dy);
                 // Turns sharper than 90° leave acute angles that trap etchant.
                 if turn > 2 || !self.grid.contains(next) || !self.in_corridor(next) {
+                    continue;
+                }
+                let length = if dx * dy == 0 {
+                    i64::from(self.profile.grid_pitch)
+                } else {
+                    self.diagonal
+                };
+                let step_cost = length
+                    + i64::from(turn) * self.profile.bend_cost
+                    + self.against_direction(state.layer, (*dx, *dy), length);
+                let next_state = State {
+                    node: next,
+                    layer: state.layer,
+                    heading: direction as u8,
+                };
+                if cannot_improve(next_state, step_cost, scratch) {
                     continue;
                 }
                 let segment = Segment::new(self.grid.point(state.node), self.grid.point(next));
@@ -549,21 +587,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     })
                 };
                 if extra != BLOCKED {
-                    let length = if dx * dy == 0 {
-                        i64::from(self.profile.grid_pitch)
-                    } else {
-                        self.diagonal
-                    };
-                    let next = State {
-                        node: next,
-                        layer: state.layer,
-                        heading: direction as u8,
-                    };
-                    let cost = length
-                        + i64::from(turn) * self.profile.bend_cost
-                        + extra
-                        + self.against_direction(state.layer, (*dx, *dy), length);
-                    relax(Some(next), cost, None, scratch);
+                    relax(Some(next_state), step_cost + extra, None, scratch);
                 }
             }
             for (position, &kind) in self.via_kinds.iter().enumerate() {
@@ -577,6 +601,14 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         && spans.connects(LayerId(state.layer), l)
                 });
                 for layer in others.collect::<Vec<_>>() {
+                    let next = State {
+                        node: state.node,
+                        layer: layer.0,
+                        heading: UNSET,
+                    };
+                    if cannot_improve(next, self.profile.via_cost, scratch) {
+                        continue;
+                    }
                     let check = self.grid.index(state.node) * self.via_kinds.len() + position;
                     let extra = scratch.via_extra.get_or_insert_with(check, || {
                         let via = Via {
@@ -587,11 +619,6 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         self.via_extra(&via).unwrap_or(BLOCKED)
                     });
                     if extra != BLOCKED {
-                        let next = State {
-                            node: state.node,
-                            layer: layer.0,
-                            heading: UNSET,
-                        };
                         relax(
                             Some(next),
                             self.profile.via_cost + extra,
@@ -771,7 +798,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             Obstruction::None => Some(0),
             Obstruction::Fixed => None,
             Obstruction::Routed(connections) if negotiation.present.is_some() => {
-                Some(negotiation.present? * connections.len() as i64)
+                Some(match negotiation.present? {
+                    Present::PerEdge(price) => price * connections.len() as i64,
+                    Present::PerCrossing { price, nets } => connections
+                        .iter()
+                        .map(|c| price * self.profile_pitch() / self.crossing_span(nets[c.index()]))
+                        .sum(),
+                })
             }
             Obstruction::Routed(connections) => {
                 let rip_ups = negotiation.rip_ups;
@@ -785,6 +818,20 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     .sum()
             }
         }
+    }
+
+    /// How far a track of this connection overlaps one of `theirs` it crosses
+    /// at right angles: both widths and the clearance on either side, a grid
+    /// edge at least.
+    fn crossing_span(&self, theirs: NetId) -> i64 {
+        let span = i64::from(self.width)
+            + i64::from(self.rules.track_width(theirs))
+            + 2 * i64::from(self.rules.clearance(Some(self.net), Some(theirs)));
+        span.max(self.profile_pitch())
+    }
+
+    fn profile_pitch(&self) -> i64 {
+        i64::from(self.profile.grid_pitch)
     }
 
     /// Whether no copper, keepout or edge is within reach of a track along any
@@ -1331,6 +1378,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction: 0.0,
+            rounds: 2,
         };
         let plan = Plan {
             connections: vec![Connection {
@@ -1384,6 +1432,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction: 0.5,
+            rounds: 2,
         };
         let connection = Connection {
             net: design.net_named("A"),
@@ -1403,5 +1452,50 @@ mod tests {
         };
         assert_eq!(layers_with_horizontal(0), [LayerId(0)]);
         assert_eq!(layers_with_horizontal(1), [LayerId(1)]);
+    }
+
+    #[test]
+    fn a_diagonal_step_pays_its_layers_direction_like_a_step_across() {
+        let design = DesignBuilder::new(30.0, 20.0)
+            .layers(2)
+            .tht("A1", Some("A"), at(5.0, 10.0), 1.0)
+            .tht("A2", Some("A"), at(25.0, 10.0), 1.0)
+            .build();
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let layout = traxide_layout_access::Layout::build(&design, &rules);
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 0,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction: 0.5,
+            rounds: 2,
+        };
+        let connection = Connection {
+            net: design.net_named("A"),
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let search = Search::new(&design, &rules, &profile, connection, &layout, None, None)
+            .with_directions(Directions {
+                against_per_mille: 500,
+                horizontal_layers: 0b01,
+            });
+        let price = |(dx, dy)| search.against_direction(0, (dx, dy), 1_000_000);
+        assert_eq!(price((1, 0)), 0, "along");
+        assert_eq!(price((0, 1)), 500_000, "across");
+        assert_eq!(price((1, 1)), 500_000, "diagonal");
     }
 }

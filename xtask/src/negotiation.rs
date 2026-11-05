@@ -44,7 +44,7 @@ impl Log {
                 }
                 self.rip_ups.push((connection, by, at));
             }
-            Event::StageStarted(_) => {}
+            Event::StageStarted(_) | Event::RoundStarted { .. } => {}
         }
     }
 }

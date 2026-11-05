@@ -17,6 +17,7 @@ fn profile() -> Profile {
         global_routing: true,
         batch_size: 1,
         against_layer_direction: 0.0,
+        rounds: 2,
     }
 }
 

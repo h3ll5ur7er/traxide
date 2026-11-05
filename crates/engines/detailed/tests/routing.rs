@@ -23,6 +23,7 @@ fn profile() -> Profile {
         global_routing: false,
         batch_size: 1,
         against_layer_direction: 0.0,
+        rounds: 2,
     }
 }
 
@@ -258,6 +259,30 @@ fn a_route_continues_a_fixed_lane_from_its_free_end_instead_of_leaving_it_dangli
 }
 
 #[test]
+fn a_route_that_continues_a_fixed_lane_keeps_doing_so_when_the_net_grows_as_a_tree() {
+    // A1's lane leads away from A2, to (5, 2). Joining A3's track to A2 straight from A1 is
+    // shorter than going on from the lane's end, but leaves that end dangling.
+    let mut design = DesignBuilder::new(20.0, 12.0)
+        .smd("A1", Some("A"), at(5.0, 5.0), 1.0, 0)
+        .smd("A2", Some("A"), at(15.0, 5.0), 1.0, 0)
+        .smd("A3", Some("A"), at(15.0, 10.0), 1.0, 0)
+        .build();
+    design.existing.tracks.push(traxide_contracts::Track {
+        net: design.net_named("A"),
+        layer: LayerId(0),
+        width: mm(0.2),
+        path: vec![at(5.0, 5.0), at(5.0, 2.0)],
+    });
+    let result = route(&design, &[("A1", "A2"), ("A3", "A2")]);
+    assert!(result.unrouted.is_empty());
+    let ends: Vec<Point> = (result.routes.tracks.iter())
+        .flat_map(|t| [t.path[0], t.path[t.path.len() - 1]])
+        .collect();
+    assert!(ends.contains(&at(5.0, 2.0)), "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn a_route_continues_a_fixed_lane_that_leads_away_from_its_target() {
     // The lane leads from A1 away from A2: joining A1 straight is shorter.
     let mut design = DesignBuilder::new(20.0, 10.0)
@@ -318,14 +343,26 @@ fn reports_a_connection_it_cannot_route() {
     assert_eq!(result.routes, Routes::default());
 }
 
-#[test]
-fn later_connections_keep_clear_of_earlier_ones() {
-    let design = DesignBuilder::new(20.0, 20.0)
+/// A from left to right and B from bottom to top across a board whose
+/// walls leave no way round the ends of either: one has to cross the other
+/// on the other layer.
+fn crossing_pairs() -> Design {
+    let beside = |x: f64, y: f64| wall(at(x - 0.9, y - 0.9), at(x + 0.9, y + 0.9));
+    DesignBuilder::new(20.0, 20.0)
         .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
         .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
         .smd("B1", Some("B"), at(10.0, 2.0), 1.0, 0)
         .smd("B2", Some("B"), at(10.0, 18.0), 1.0, 0)
-        .build();
+        .keepout(beside(0.5, 10.0), None, KeepoutScope::Everything)
+        .keepout(beside(19.5, 10.0), None, KeepoutScope::Everything)
+        .keepout(beside(10.0, 0.5), None, KeepoutScope::Everything)
+        .keepout(beside(10.0, 19.5), None, KeepoutScope::Everything)
+        .build()
+}
+
+#[test]
+fn later_connections_keep_clear_of_earlier_ones() {
+    let design = crossing_pairs();
     let result = route(&design, &[("A1", "A2"), ("B1", "B2")]);
     assert!(result.unrouted.is_empty());
     assert!(
@@ -337,12 +374,7 @@ fn later_connections_keep_clear_of_earlier_ones() {
 
 #[test]
 fn connections_that_may_cross_are_searched_one_after_the_other() {
-    let design = DesignBuilder::new(20.0, 20.0)
-        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
-        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
-        .smd("B1", Some("B"), at(10.0, 2.0), 1.0, 0)
-        .smd("B2", Some("B"), at(10.0, 18.0), 1.0, 0)
-        .build();
+    let design = crossing_pairs();
     let in_one_batch = Profile {
         batch_size: 2,
         ..profile()
@@ -425,6 +457,69 @@ fn the_routing_kept_completes_as_much_as_routing_once_with_no_more_vias() {
         kept.routes.vias.len(),
         once.routes.vias.len()
     );
+}
+
+#[test]
+fn more_rounds_route_as_much_with_no_more_vias() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let in_rounds = |rounds| {
+        let profile = Profile {
+            against_layer_direction: 0.5,
+            rounds,
+            ..profile()
+        };
+        route_with(&design, &profile, &pairs)
+    };
+    let (one, two, six) = (in_rounds(1), in_rounds(2), in_rounds(6));
+    assert!(one.unrouted.is_empty() && two.unrouted.is_empty() && six.unrouted.is_empty());
+    assert!(two.routes.vias.len() <= one.routes.vias.len());
+    assert!(six.routes.vias.len() <= two.routes.vias.len());
+    assert_legal(&design, &six.routes);
+}
+
+#[test]
+fn each_round_is_announced_before_its_routing() {
+    let (design, pairs) = scattered_nets();
+    let pairs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let rules = traxide_rules::compile(
+        &design,
+        Purpose::Routing {
+            grid_pitch: 100_000,
+        },
+    );
+    let mut layout = Layout::build(&design, &rules);
+    let plan = Plan {
+        connections: pairs
+            .iter()
+            .map(|&(from, to)| connection(&design, from, to))
+            .collect(),
+    };
+    let rounds = std::cell::RefCell::new(Vec::new());
+    let watch = |event: Event| {
+        if let Event::RoundStarted { round, of } = event {
+            rounds.borrow_mut().push((round, of));
+        }
+    };
+    let profile = Profile {
+        against_layer_direction: 0.5,
+        rounds: 3,
+        ..profile()
+    };
+    Router::new(&design, &rules, &profile).route_plan(
+        &plan,
+        None,
+        &mut layout,
+        &CancelToken::new(),
+        &watch,
+    );
+    assert_eq!(*rounds.borrow(), [(1, 3), (2, 3), (3, 3)]);
 }
 
 #[test]
@@ -617,6 +712,34 @@ fn past_its_deadline_routing_rips_nothing_up_but_routes_what_still_fits() {
     assert!(!ripped_up.get());
     assert_eq!(result.unrouted, [connection(&design, "Y1", "Y2")]);
     assert_legal(&design, &result.routes);
+}
+
+#[test]
+fn long_past_its_deadline_routing_searches_nothing_more() {
+    // Given no time, routing may still search for a second past its deadline;
+    // five seconds past it, that second is long gone.
+    let design = one_way_for_two();
+    let rules = traxide_rules::compile(
+        &design,
+        Purpose::Routing {
+            grid_pitch: 100_000,
+        },
+    );
+    let mut layout = Layout::build(&design, &rules);
+    let plan = Plan {
+        connections: vec![
+            connection(&design, "X1", "X2"),
+            connection(&design, "Y1", "Y2"),
+        ],
+    };
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(5))
+        .expect("the clock has run five seconds");
+    let result = Router::new(&design, &rules, &profile())
+        .with_deadline(long_ago)
+        .route_plan(&plan, None, &mut layout, &CancelToken::new(), &Silent);
+    assert_eq!(result.unrouted.len(), 2);
+    assert!(result.routes.tracks.is_empty());
 }
 
 #[test]
@@ -1181,6 +1304,68 @@ fn a_hop_under_a_track_that_could_run_on_the_other_layer_is_taken_out() {
         .keepout(
             wall(at(9.0, 18.0), at(11.0, 20.0)),
             None,
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("B1", "B2"), ("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
+fn a_hop_under_a_wide_track_is_taken_out_as_under_a_narrow_one() {
+    // As above, with tracks and clearances three times as wide: crossing B
+    // overlaps it over three times as many grid edges, but is one crossing.
+    let design = DesignBuilder::new(20.0, 20.0)
+        .layers(2)
+        .track_width(0.6)
+        .clearance(0.6)
+        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .tht("B1", Some("B"), at(10.0, 3.0), 1.2)
+        .tht("B2", Some("B"), at(10.0, 17.0), 1.2)
+        .keepout(
+            wall(at(9.0, 0.0), at(11.0, 2.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.0, 18.0), at(11.0, 20.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .build();
+    let result = route(&design, &[("B1", "B2"), ("A1", "A2")]);
+    assert!(result.unrouted.is_empty());
+    assert_eq!(result.routes.vias, [], "{:?}", result.routes.tracks);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
+fn a_hop_is_taken_out_where_what_it_passes_finds_room_only_beyond_its_window() {
+    // As above, but a wall on the second layer leaves B a way there only
+    // round the wall's end, 7 mm off its pads: beyond the 5 mm its window
+    // reaches past them.
+    let design = DesignBuilder::new(24.0, 20.0)
+        .layers(2)
+        .smd("A1", Some("A"), at(2.0, 10.0), 1.0, 0)
+        .smd("A2", Some("A"), at(18.0, 10.0), 1.0, 0)
+        .tht("B1", Some("B"), at(10.0, 3.0), 1.2)
+        .tht("B2", Some("B"), at(10.0, 17.0), 1.2)
+        .keepout(
+            wall(at(9.0, 0.0), at(11.0, 2.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.0, 18.0), at(11.0, 20.0)),
+            None,
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(1.0, 9.0), at(16.5, 11.0)),
+            Some(1),
             KeepoutScope::Everything,
         )
         .build();

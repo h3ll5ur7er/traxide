@@ -41,7 +41,9 @@ enum Command {
         /// into KiCad with --kicad.
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// The routing profile.
+        /// The routing profile: `default`, routed in several rounds at other
+        /// prices, for fewest vias; `fast`, routed once, for a first look; or
+        /// one of a --config file.
         #[arg(long, default_value = "default")]
         profile: String,
         /// A traxide.toml with profiles of your own.
@@ -59,7 +61,8 @@ enum Command {
         #[arg(long, value_name = "REPORT.json")]
         drc: Option<PathBuf>,
         /// Stop negotiating after this many seconds and route what is left once
-        /// more without ripping anything up; routing ends a little later.
+        /// more without ripping anything up, for a tenth of the time given at most
+        /// (a second at least); what is left stays unrouted.
         #[arg(long, value_name = "SECONDS", value_parser = seconds)]
         time_limit: Option<Duration>,
         /// Route the board's own tracks and vias again, but for those locked in
@@ -225,9 +228,13 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
         time_limit,
         reroute_existing,
     };
+    let round = std::cell::Cell::new(None);
     let progress = |event: Event| {
+        if let Event::RoundStarted { round: this, of } = event {
+            round.set((of > 1).then_some((this, of)));
+        }
         if !quiet {
-            show(&event);
+            show(&event, round.get());
         }
     };
     let report = traxide_routing::route(&job, &progress, &CancelToken::new())?;
@@ -306,7 +313,9 @@ fn run_as_freerouting(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn show(event: &Event) {
+/// Shows how routing gets on; `round` is the round of how many routing is
+/// in, where it routes in more than one.
+fn show(event: &Event, round: Option<(u32, u32)>) {
     let mut stderr = std::io::stderr();
     // Progress is a courtesy; a closed stderr must not stop the routing.
     let _ = match event {
@@ -315,8 +324,14 @@ fn show(event: &Event) {
             write!(stderr, "\r\x1b[K{stage:?}…")
         }
         Event::StageStarted(_) => Ok(()),
-        Event::ConnectionRouted { done, total } => write!(stderr, "\r\x1b[KRouting {done}/{total}"),
-        Event::RippedUp { .. } => Ok(()),
+        Event::ConnectionRouted { done, total } => match round {
+            Some((round, of)) => write!(
+                stderr,
+                "\r\x1b[KRouting, round {round} of {of}: {done}/{total}"
+            ),
+            None => write!(stderr, "\r\x1b[KRouting {done}/{total}"),
+        },
+        Event::RoundStarted { .. } | Event::RippedUp { .. } => Ok(()),
     };
 }
 

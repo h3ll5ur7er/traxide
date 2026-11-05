@@ -34,9 +34,15 @@ pub struct Profile {
     /// rip-ups queue connections again.
     pub batch_size: u32,
     /// What a step across its layer's direction costs, as a share of its
-    /// length; a diagonal step pays half. The board is routed side by side
+    /// length; a diagonal step pays as much. The board is routed side by side
     /// without directions and with its layers running crosswise in either
     /// orientation, and again with dearer vias where time is left; the routing
     /// with fewer vias stays. Zero routes once, with no directions.
     pub against_layer_direction: f64,
+    /// How many rounds of routings side by side are made where time is left,
+    /// the best of all staying: the first at this profile's prices, the
+    /// second with vias dearer, the further ones with layer directions
+    /// dearer or cheaper, as no one price suits every board. Without layer
+    /// directions, one routing is all.
+    pub rounds: u32,
 }

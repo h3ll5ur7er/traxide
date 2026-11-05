@@ -17,7 +17,7 @@ use search::NoRoute;
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use traxide_contracts::geometry::{Point, Rect, Segment};
 use traxide_contracts::{
     Connection, ConnectionId, ConstraintSet, Corridors, Design, Event, LayoutAccess, NetId,
@@ -41,32 +41,72 @@ const ROUNDS_WITHOUT_GAIN: usize = 4;
 /// How much wider each window of a search that found no way grows.
 const WIDER_WINDOW: i32 = 4;
 
-/// How many times dearer a via is when routing is tidied: negotiating at that
-/// price costs connections and time, but once everything is routed a
-/// connection may well find a way with fewer vias among the rest (TRX-72).
-const TIDYING_VIA_COST: i64 = 4;
+/// How many times dearer a via is when routing is tidied, hops are taken out
+/// and trees grow: negotiating at that price costs connections and time, but
+/// once everything is routed a connection may well find a way with fewer
+/// vias among the rest (TRX-72). Since what a hop's way crosses finds room
+/// further off, dearer pays: with `--profile fast`, TokenBoard and ten corpus
+/// boards together 1,293 vias at 4 times, 1,221 at 6, 1,201 at 8, 1,162 at 10
+/// (TRX-88).
+const TIDYING_VIA_COST: i64 = 10;
 
 /// How boldly a search heads for its target when routing is tidied: any way
 /// with fewer vias will do, and the profile's weight, searching for the
-/// cheapest, made tidying take as long as routing on small boards.
-const TIDYING_HEURISTIC_WEIGHT: f64 = 2.0;
+/// cheapest, made tidying take as long as routing on small boards. 1.5
+/// instead of 2 with vias 10 times dearer: 1,090 vias instead of 1,162, in
+/// 17 % more time; with vias 12 times dearer 1,120 (TRX-88).
+const TIDYING_HEURISTIC_WEIGHT: f64 = 1.5;
 
-/// Taking out hops, a grid edge overlapping a routed connection costs this
-/// share of a via: crossing a track overlaps it for some 8 edges at 0.1 mm,
-/// so a crossing costs about two vias. On TokenBoard a quarter of a via per
-/// edge left 379 vias of 446, a sixteenth 405, half a via 428: crossed
-/// cheaply, more tracks have to move, and fewer of them find room again.
-const CROSSING_EDGES_PER_VIA: i64 = 4;
+/// Taking out hops, crossing a routed connection costs this many eighths of
+/// a via, however wide the two tracks and the clearance between them. Priced
+/// per grid edge overlapped instead, at an eighth of a via, crossing
+/// TokenBoard's 0.2 mm tracks cost about a via but CNH's wider ones over two,
+/// so no wide track moved for a hop: CNH kept 52 vias, 19 now. With
+/// `--profile fast`, TokenBoard and 28 corpus boards 1,618 vias instead of
+/// 1,686, in 53 % more time; at half a via 1,640, five eighths 1,650
+/// (TRX-87, TRX-92).
+const CROSSING_EIGHTHS_OF_A_VIA: i64 = 3;
 
-/// How many times dearer vias are when the board is routed again: dearer
-/// throughout, TokenBoard routed with 275 vias instead of 314, 8088sbc 73
-/// instead of 93, CNH 66 instead of 84, but LogicBoard completed 18 nets
-/// fewer within 90 s; which price suits a board only routing tells.
-const DEARER_VIAS: i64 = 2;
+/// The rounds after the first: their prices, as factors of the profile's
+/// price of a via and of running across a layer's direction, and whether
+/// they route the board as is too, which only the price of a via moves.
+/// Vias twice as dear throughout routed TokenBoard with 275 vias instead of
+/// 314, 8088sbc with 73 instead of 93, CNH with 66 instead of 84, but
+/// LogicBoard with 18 nets fewer within 90 s (TRX-80); layer directions half
+/// as dear again or a third cheaper, Sofle with 364 or 385 vias instead of
+/// 386, CNH with 45 or 63 instead of 64, TokenBoard with 291 instead of 267
+/// (TRX-84): which prices suit a board only routing tells.
+const LATER_ROUNDS: [(i64, f64, bool); 5] = [
+    (2, 1.0, true),
+    (1, 1.5, false),
+    (2, 1.5, false),
+    (1, 0.7, false),
+    (2, 0.7, false),
+];
+
+/// How many times further than the profile's detour margin a connection that
+/// a hop's new way crosses may stray to find room again: in its own window,
+/// 42 of 156 attempts on TokenBoard failed. Measured with `--profile fast`
+/// on TokenBoard and ten corpus boards together: 1,592 vias in its own
+/// window, 1,509 three times as far, 1,492 six times, 1,548 widening four
+/// times at a time only where none was found, for 6 % more time (TRX-85).
+const CROSSED_ROOM: i32 = 6;
 
 /// Moving tracks makes room for further hops to go: on TokenBoard a second
-/// pass took out 16 more vias in 10 s, a third 2 more in 6 s.
-const MOST_HOP_PASSES: usize = 2;
+/// pass took out 16 more vias in 10 s, a third 2 more in 6 s (TRX-76). With
+/// crossings an eighth of a via per edge, a third pass leaves TokenBoard and
+/// the ten boards with 1,311 vias instead of 1,355, in 14 % more time; a
+/// fourth TokenBoard with 318 instead of 332 and the ten with 975 instead of
+/// 979, in 8 % more; a fifth takes out none on TokenBoard (TRX-87).
+const MOST_HOP_PASSES: usize = 4;
+
+/// Past its deadline, routing searches for what is still queued for this
+/// share of the time it was given more, a second at least, and leaves the
+/// rest unrouted: LogicBoard's searches without rip-up took up to 43 s past a
+/// 90 s limit, as each way of running the layers drained its queue on one
+/// thread.
+const SEARCHING_PAST_THE_DEADLINE: u32 = 10;
+const LEAST_SEARCHING_PAST_THE_DEADLINE: Duration = Duration::from_secs(1);
 
 pub struct Router<'a> {
     finder: Finder<'a>,
@@ -74,6 +114,8 @@ pub struct Router<'a> {
     scratches: Vec<search::Scratch>,
     /// When negotiation stops ripping up, whatever it would still gain.
     deadline: Option<Instant>,
+    /// When it stops searching (SEARCHING_PAST_THE_DEADLINE).
+    searching_ends: Option<Instant>,
     /// Whether the board's own copper cuts each connection asked about off,
     /// which no routing changes: a search for one cut off floods all it can
     /// reach, again on every attempt.
@@ -100,6 +142,7 @@ impl<'a> Router<'a> {
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
+            searching_ends: None,
             cut_off: HashMap::new(),
         }
     }
@@ -108,15 +151,24 @@ impl<'a> Router<'a> {
     /// routes are the same on any number of them.
     /// Stops negotiation at `deadline`: what is still queued then routes once
     /// more without crossing anything, each in its own window only, so routing
-    /// ends a little later.
+    /// ends a little later: a tenth of the time given at most, or a second
+    /// (SEARCHING_PAST_THE_DEADLINE).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        let given = deadline.saturating_duration_since(Instant::now());
+        let past = (given / SEARCHING_PAST_THE_DEADLINE).max(LEAST_SEARCHING_PAST_THE_DEADLINE);
         self.deadline = Some(deadline);
+        self.searching_ends = Some(deadline + past);
         self
     }
 
     fn is_past_deadline(&self) -> bool {
         self.deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn is_done_searching(&self) -> bool {
+        self.searching_ends
+            .is_some_and(|ends| Instant::now() >= ends)
     }
 
     pub fn with_threads(mut self, threads: usize) -> Self {
@@ -143,11 +195,11 @@ impl<'a> Router<'a> {
     /// The board is routed so three ways side by side (`route_side_by_side`):
     /// as is, and with each layer's tracks running one way, crosswise to the
     /// next, in either orientation (`ways_to_run_layers`). Where time is left,
-    /// the three routings are made again with vias DEARER_VIAS times dearer.
-    /// The routing that completes more, or as much with fewer vias, stays,
-    /// the first of equals: running layers crosswise leaves fewer hops to
-    /// take out where it suits the board, and only routing tells which way,
-    /// and which price of a via, does (TRX-77, TRX-79, TRX-80).
+    /// it is routed again in the profile's further rounds, at the prices of
+    /// LATER_ROUNDS. The routing that completes more, or as much with fewer
+    /// vias, stays, the first of equals: running layers crosswise leaves fewer
+    /// hops to take out where it suits the board, and only routing tells which
+    /// way, and which prices, do (TRX-77, TRX-79, TRX-80, TRX-84).
     pub fn route_plan<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         plan: &Plan,
@@ -163,27 +215,44 @@ impl<'a> Router<'a> {
                 .into_result(plan);
         }
         let threads = self.scratches.len();
-        let mut again = layout.clone();
-        let mut best = self.route_side_by_side(&ways, plan, corridors, layout, cancel, events);
-        if !cancel.is_cancelled() && !self.is_past_deadline() {
-            let dearer = Profile {
-                via_cost: self.finder.profile.via_cost * DEARER_VIAS,
+        let unrouted = layout.clone();
+        let all_ways: Vec<search::Directions> = std::iter::once(search::Directions::default())
+            .chain(ways)
+            .collect();
+        let rounds = (self.finder.profile.rounds as usize).clamp(1, LATER_ROUNDS.len() + 1);
+        let of = rounds as u32;
+        events.publish(Event::RoundStarted { round: 1, of });
+        let mut best = self.route_side_by_side(&all_ways, plan, corridors, layout, cancel, events);
+        let later = LATER_ROUNDS.iter().take(rounds - 1);
+        for (round, &(dearer_vias, layers, as_is)) in (2..).zip(later) {
+            if cancel.is_cancelled() || self.is_past_deadline() {
+                break;
+            }
+            events.publish(Event::RoundStarted { round, of });
+            let priced = Profile {
+                via_cost: self.finder.profile.via_cost * dearer_vias,
+                against_layer_direction: self.finder.profile.against_layer_direction * layers,
                 ..self.finder.profile.clone()
             };
-            let second = self
-                .alike(&dearer, search::Directions::default(), threads)
-                .route_side_by_side(&ways, plan, corridors, &mut again, cancel, events);
-            if second.is_better_than(&best, plan) {
-                best = second;
-                *layout = again;
+            let mut router = self.alike(&priced, search::Directions::default(), threads);
+            let ways: Vec<search::Directions> = (as_is.then(search::Directions::default))
+                .into_iter()
+                .chain(router.ways_to_run_layers())
+                .collect();
+            let mut routed = unrouted.clone();
+            let attempt =
+                router.route_side_by_side(&ways, plan, corridors, &mut routed, cancel, events);
+            if attempt.is_better_than(&best, plan) {
+                best = attempt;
+                *layout = routed;
             }
         }
         best.into_result(plan)
     }
 
-    /// Routes the board as is, which publishes progress, and with its layers
-    /// running each of `ways`, side by side, each in a layout of its own and
-    /// on its share of the threads; keeps the best routing in `layout`.
+    /// Routes the board with its layers running each of `ways`, side by side,
+    /// each in a layout of its own and on its share of the threads, the first
+    /// here, publishing progress; keeps the best routing in `layout`.
     fn route_side_by_side<L: LayoutAccess + Clone + Send + Sync>(
         &mut self,
         ways: &[search::Directions],
@@ -193,14 +262,24 @@ impl<'a> Router<'a> {
         cancel: &CancelToken,
         events: &impl Publisher<Event>,
     ) -> Attempt {
-        let threads = (self.scratches.len() / (ways.len() + 1)).max(1);
-        let others: Vec<(Router<'_>, L)> = (ways.iter())
+        let Some((&here, elsewhere)) = ways.split_first() else {
+            return self.route_attempt(plan, corridors, layout, cancel, events);
+        };
+        // The first routing takes the threads left over: on 4 threads, three
+        // routings would leave one idle.
+        let threads = (self.scratches.len() / ways.len()).max(1);
+        let others: Vec<(Router<'_>, L)> = (elsewhere.iter())
             .map(|&directions| {
                 let router = self.alike(self.finder.profile, directions, threads);
                 (router, layout.clone())
             })
             .collect();
-        self.scratches.truncate(threads);
+        let left_over = self
+            .scratches
+            .len()
+            .saturating_sub(threads * elsewhere.len());
+        self.scratches.truncate(left_over.max(1));
+        let directions = std::mem::replace(&mut self.finder.directions, here);
         let (first, others) = std::thread::scope(|scope| {
             let running: Vec<_> = (others.into_iter())
                 .map(|(mut router, mut layout)| {
@@ -217,6 +296,7 @@ impl<'a> Router<'a> {
                 .collect();
             (first, others)
         });
+        self.finder.directions = directions;
         let mut best = first;
         for (attempt, routed_layout) in others {
             if attempt.is_better_than(&best, plan) {
@@ -270,6 +350,7 @@ impl<'a> Router<'a> {
             },
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
+            searching_ends: self.searching_ends,
             cut_off: self.cut_off.clone(),
         }
     }
@@ -405,12 +486,24 @@ impl<'a> Router<'a> {
             profile: &dearer,
             ..self.finder
         };
+        let roomier = Profile {
+            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
+            ..dearer.clone()
+        };
+        let room_finder = Finder {
+            profile: &roomier,
+            ..self.finder
+        };
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
+        let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
         let crossing = search::Negotiation {
             rip_ups: &no_rip_ups,
             history: &no_history,
-            present: Some(dearer.via_cost / CROSSING_EDGES_PER_VIA),
+            present: Some(search::Present::PerCrossing {
+                price: dearer.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
+                nets: &nets,
+            }),
         };
         let fewest_of: Vec<usize> = plan
             .connections
@@ -456,7 +549,8 @@ impl<'a> Router<'a> {
             layout.add_route(id, &moved);
             let mut rerouted = Vec::new();
             for &other in &crossed {
-                match finder.search(scratch, plan.connections[other.index()], layout, None, None) {
+                let connection = plan.connections[other.index()];
+                match room_finder.search(scratch, connection, layout, None, None) {
                     Ok(route) => {
                         layout.add_route(other, &route);
                         rerouted.push(route);
@@ -504,7 +598,9 @@ impl<'a> Router<'a> {
     /// and keeps the new way if it has fewer vias, or as many and is shorter:
     /// a pad beside its net's track joins the track, as a tree grows, rather
     /// than running beside it to a pad further on. A connection that another
-    /// now ends on stays where it is from then on, so nothing comes apart;
+    /// now ends on stays where it is from then on, so nothing comes apart, and
+    /// so does one that goes on from the free end of a lane of the board's
+    /// wiring, which would otherwise be left dangling;
     /// so this comes last, when no rip-up moves anything any more. The
     /// shortest routes go first, so branches join trunks rather than trunks
     /// moving onto their branches.
@@ -537,7 +633,7 @@ impl<'a> Router<'a> {
             let Some(routes) = attempt.routed[i].clone() else {
                 continue;
             };
-            if carrying[i] {
+            if carrying[i] || continues_a_lane(self.finder.design, connection, &routes) {
                 continue;
             }
             let sides = joined_without(plan, &attempt.routed, i);
@@ -564,9 +660,20 @@ impl<'a> Router<'a> {
                 layout.add_route(id, &routes);
                 continue;
             };
+            let design = self.finder.design;
+            let Some(holding) =
+                holding_pads_left(design, connection, &grown, &sides, &attempt.routed)
+            else {
+                layout.add_route(id, &routes);
+                continue;
+            };
+            for other in holding {
+                carrying[other] = true;
+            }
+            let pads = [connection.from, connection.to].map(|pad| design.pad(pad).position);
             for &other in sides.iter().flatten() {
                 if let Some(theirs) = &attempt.routed[other]
-                    && ends_on(&grown, theirs)
+                    && ends_on(&grown, theirs, pads)
                 {
                     carrying[other] = true;
                 }
@@ -650,7 +757,7 @@ impl<'a> Router<'a> {
         let mut unrouted = Vec::new();
         let (mut hemmed_in, mut exits_taken, mut cut_off) = (Vec::new(), Vec::new(), Vec::new());
         while !state.queue.is_empty() {
-            if cancel.is_cancelled() {
+            if cancel.is_cancelled() || self.is_done_searching() {
                 unrouted.extend(state.queue.drain(..));
                 break;
             }
@@ -739,7 +846,7 @@ impl<'a> Router<'a> {
                 let negotiation = search::Negotiation {
                     rip_ups: &no_rip_ups,
                     history: &state.history,
-                    present: Some(present),
+                    present: Some(search::Present::PerEdge(present)),
                 };
                 let found = self.find_all(&batch, plan, corridors, layout, Some(negotiation));
                 for (id, found) in batch.iter().copied().zip(found) {
@@ -1181,14 +1288,26 @@ fn track_length(routes: &Routes) -> i64 {
         .sum()
 }
 
+/// Whether `routes` go on from the free end of the board's wiring that a pad
+/// of `connection` starts: moved, they would leave that end dangling.
+fn continues_a_lane(design: &Design, connection: Connection, routes: &Routes) -> bool {
+    [connection.from, connection.to].into_iter().any(|pad| {
+        lanes::free_ends(design, design.pad(pad))
+            .iter()
+            .any(|end| reaches(routes, end.at))
+    })
+}
+
 /// Whether `new` has fewer vias than `old`, or as many and shorter tracks.
 fn is_tidier(new: &Routes, old: &Routes) -> bool {
     (new.vias.len(), track_length(new)) < (old.vias.len(), track_length(old))
 }
 
-/// Whether a track of `routes` starts or ends on `theirs`: on one of their
-/// tracks or vias.
-fn ends_on(routes: &Routes, theirs: &Routes) -> bool {
+/// Whether a track of `routes` starts or ends on `theirs`, elsewhere than at
+/// one of its own `pads`, which joins it to what ends there without them; or
+/// a via of `routes` stands on their copper, as a route of a via alone joins
+/// copper crossing on two layers.
+fn ends_on(routes: &Routes, theirs: &Routes, pads: [Point; 2]) -> bool {
     let on = |at: Point| {
         theirs.vias.iter().any(|v| v.position == at)
             || (theirs.tracks.iter())
@@ -1198,7 +1317,51 @@ fn ends_on(routes: &Routes, theirs: &Routes) -> bool {
     (routes.tracks.iter())
         .flat_map(|t| [t.path.first(), t.path.last()])
         .flatten()
-        .any(|&at| on(at))
+        .any(|&at| !pads.contains(&at) && on(at))
+        || routes.vias.iter().any(|v| on(v.position))
+}
+
+/// The connections that must stay where they are now that `grown`, a new way
+/// for `connection`, may start or end on its net's copper beside a pad
+/// instead of on the pad: for each pad it leaves, those of the pad's side
+/// that still reach the pad, which would otherwise be left alone once they
+/// grew elsewhere too. `None` where none does: the new way leaves the pad
+/// alone itself.
+fn holding_pads_left(
+    design: &Design,
+    connection: Connection,
+    grown: &Routes,
+    sides: &[Vec<usize>; 2],
+    routed: &[Option<Routes>],
+) -> Option<Vec<usize>> {
+    let mut holding = Vec::new();
+    for (pad, side) in [connection.from, connection.to].into_iter().zip(sides) {
+        if reaches_pad(design, grown, pad) {
+            continue;
+        }
+        let reaching: Vec<usize> = (side.iter().copied())
+            .filter(|&k| {
+                routed[k]
+                    .as_ref()
+                    .is_some_and(|r| reaches_pad(design, r, pad))
+            })
+            .collect();
+        if reaching.is_empty() {
+            return None;
+        }
+        holding.extend(reaching);
+    }
+    Some(holding)
+}
+
+/// Whether `routes` reach `pad`: at its centre, or at a free end of the
+/// lanes of the board's wiring it starts.
+fn reaches_pad(design: &Design, routes: &Routes, pad: traxide_contracts::PadId) -> bool {
+    let pad = design.pad(pad);
+    reaches(routes, pad.position)
+        || lanes::free_ends(design, pad)
+            .iter()
+            .any(|end| reaches(routes, end.at))
 }
 
 /// Whether `at` lies on the segment from `a` to `b`.
@@ -1482,6 +1645,7 @@ mod tests {
             global_routing: false,
             batch_size: 1,
             against_layer_direction,
+            rounds: 2,
         };
         let ways = Router::new(design, &rules, &profile).ways_to_run_layers();
         assert!(
@@ -1576,6 +1740,7 @@ mod tests {
             global_routing: false,
             batch_size: 16,
             against_layer_direction: 0.0,
+            rounds: 2,
         };
         let rules = traxide_rules::compile(
             &design,
@@ -1641,6 +1806,91 @@ mod tests {
         assert!(
             more_connections.standing(&plan)
                 > attempt(&[true, false, false, false, false]).standing(&plan)
+        );
+    }
+
+    fn track_from(path: &[(i32, i32)]) -> Routes {
+        Routes {
+            tracks: vec![Track {
+                net: NetId::from_index(0),
+                layer: LayerId(0),
+                width: 100_000,
+                path: path.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+            }],
+            vias: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_route_that_meets_another_at_its_own_pad_does_not_end_on_it() {
+        // Theirs runs from (0, 0) to the pad at (10, 0), where ours starts.
+        let pads = [Point::new(10, 0), Point::new(10, 20)];
+        let theirs = track_from(&[(0, 0), (10, 0)]);
+        assert!(!ends_on(&track_from(&[(10, 0), (10, 20)]), &theirs, pads));
+        assert!(ends_on(&track_from(&[(5, 0), (10, 20)]), &theirs, pads));
+    }
+
+    #[test]
+    fn a_route_of_a_via_alone_ends_on_the_copper_it_stands_on() {
+        // Growing trees may join two copper of the net crossing on different
+        // layers with a via and no track at all.
+        let pads = [Point::new(10, 0), Point::new(10, 20)];
+        let theirs = track_from(&[(0, 5), (20, 5)]);
+        let via_alone = Routes {
+            tracks: Vec::new(),
+            vias: vec![Via {
+                net: NetId::from_index(0),
+                kind: ViaKindId::from_index(0),
+                position: Point::new(5, 5),
+            }],
+        };
+        assert!(ends_on(&via_alone, &theirs, pads));
+    }
+
+    #[test]
+    fn a_route_grown_off_its_pad_holds_the_routes_still_reaching_the_pad() {
+        // P1 to P2 grows to start on P3's track to P1 instead of on P1: that
+        // track alone reaches P1 then, and must stay.
+        let design = DesignBuilder::new(30.0, 30.0)
+            .smd("P1", Some("A"), at(10.0, 10.0), 1.0, 0)
+            .smd("P2", Some("A"), at(20.0, 10.0), 1.0, 0)
+            .smd("P3", Some("A"), at(10.0, 20.0), 1.0, 0)
+            .build();
+        let pad = |name: &str| design.pad_named(name);
+        let mm = traxide_contracts::testing::mm;
+        let track = |points: &[(f64, f64)]| Routes {
+            tracks: vec![Track {
+                net: NetId::from_index(0),
+                layer: LayerId(0),
+                width: 200_000,
+                path: points
+                    .iter()
+                    .map(|&(x, y)| Point::new(mm(x), mm(y)))
+                    .collect(),
+            }],
+            vias: Vec::new(),
+        };
+        let connection = Connection {
+            net: NetId::from_index(0),
+            from: pad("P1"),
+            to: pad("P2"),
+        };
+        let sides = [vec![0], Vec::new()];
+        let grown_off_p1 = track(&[(10.0, 15.0), (20.0, 10.0)]);
+        let p3_to_p1 = Some(track(&[(10.0, 20.0), (10.0, 10.0)]));
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_off_p1, &sides, &[p3_to_p1]),
+            Some(vec![0])
+        );
+        let p3_off_p1 = Some(track(&[(10.0, 20.0), (15.0, 15.0)]));
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_off_p1, &sides, &[p3_off_p1]),
+            None
+        );
+        let grown_from_p1 = track(&[(10.0, 10.0), (20.0, 10.0)]);
+        assert_eq!(
+            holding_pads_left(&design, connection, &grown_from_p1, &sides, &[None]),
+            Some(Vec::new())
         );
     }
 }

@@ -52,6 +52,101 @@ After hops and trees, the orientation decides whether layer directions pay: on T
 
 TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's own), 12,323 mm of track instead of 12,372. On TokenBoard the second routing reaches the limit, which leaves it 5 vias short of what it finds without one.
 
+## Dearer vias while tidying (M5, TRX-88)
+
+Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65. With the default profile, TokenBoard without a limit routes with **229** vias instead of 253 (Freerouting: 199), but with more track: 12,977 mm with the board's own instead of 12,483 (Freerouting's board 12,381), in fewer segments, 2,716 instead of 2,788.
+
+Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095. Growing trees once more at the end, two-pad nets too, with a heuristic weight of 1 so routes pull tight: 1,084 vias, 0.7 % less track, but 1.3 % more corners and 17 % more time.
+
+## A crossing priced as a whole (M5, TRX-92)
+
+CI's corpus run ([[TRX-91]]) showed CNH (Issue230) with 48 vias where Freerouting takes 5. Taking out hops priced crossing a routed connection per grid edge overlapped, an eighth of a via each: about a via across TokenBoard's 0.2 mm tracks and clearances, but two and more across CNH's 0.25 to 0.64 mm tracks with up to 0.64 mm clearance, so no wide track moved for a hop. A crossing now costs three eighths of a via, spread over the edges it overlaps from both tracks' widths and the clearance between their nets. With `--profile fast`, without a limit, TokenBoard and 28 corpus boards (vias, time):
+
+| Crossing | Vias | Time |
+| --- | --- | --- |
+| an eighth of a via per edge | 1,686 | 616 s |
+| **three eighths of a via** | **1,618** | 944 s |
+| half a via | 1,640 | 832 s |
+| five eighths of a via | 1,650 | 788 s |
+
+CNH 19 instead of 52, 8088sbc 51 instead of 71, Pajalnaja 26 instead of 42, bm07 20 instead of 33, RelayModule 27 instead of 35; Sofle 362 instead of 343, Issue034 97 instead of 82, TokenBoard 258 instead of 252. CNH with the default profile at half a via: 13 vias without a limit instead of 37, 19 within 90 s instead of 48. TokenBoard with the default profile, without a limit: 218 vias instead of 221, 12,789 mm of track instead of 12,962, in 1,507 s instead of 1,141.
+
+## Connections that meet at a shared pad (M5, TRX-90)
+
+TokenBoard routed with the default profile had two vias on every key column where one would do: the column ran down the front copper, dropped through a via to the back copper's switch pad, and a second via 6 mm on lifted it back. Growing trees left a connection in place once another ended on its copper, and took one that merely started at the same pad for one ending on it. Without that, TokenBoard routes with **221** vias instead of 229 with the default profile, without a limit (48 in hops instead of 70; 12,962 mm of track; Freerouting: 199); with `--profile fast`, TokenBoard and the ten corpus boards with 1,078 instead of 1,090, none with more. Growing trees twice: 1,075, in 3 % more time; not built. Nor built: sparing connections shorter than 10 mm their layer's direction, as around TokenBoard's MCU on the back copper short signals change layers twice where the board's author routes them on one: in one round of the default profile, TokenBoard and the ten corpus boards 999 vias instead of 988 (TokenBoard 235 instead of 233, Issue034 76 instead of 69).
+
+## Searching past the deadline, bounded (M5, TRX-89)
+
+The corpus run of [[TRX-88]] stopped LogicBoard (Issue219) after 120 s on its 90 s limit. Past the deadline, what is still queued routes once more without rip-up, and each of the three ways of running the layers drained its queue on one thread: 14, 31 and 43 s past the deadline on this machine, 130 s in all. Routing now searches for a tenth of the time given past it, a second at least, and leaves the rest unrouted: LogicBoard in 100 s, with 316 of 343 nets complete instead of 328.
+
+## Cheaper crossings, a third pass (M5, TRX-87)
+
+Since what a hop's way crosses searches six times as far for room ([[TRX-85]]), crossing a routed connection pays at an eighth of a via per grid edge instead of a quarter, and taking out hops makes three passes instead of two. With `--profile fast`, TokenBoard and the ten corpus boards together: 1,311 vias instead of 1,492, in 303 s instead of 215 s; an eighth with two passes 1,355, a twelfth 1,362, a sixteenth 1,390, half a via 1,659, a quarter with three passes 1,467. Issue034 98 instead of 117, Issue015 49 instead of 70, RelayModule 42 instead of 53, CNH 67 instead of 87, Issue022 78 instead of 106; TokenBoard 332 instead of 335. With the default profile, TokenBoard without a limit: 256 vias instead of 261, in 579 s instead of 476 s. A fourth pass: with `--profile fast` TokenBoard 318 vias instead of 332, the ten 975 instead of 979, in 8 % more time, and with the default profile TokenBoard 253; a fifth takes out none more.
+
+## Room for what a hop's way crosses (M5, TRX-85)
+
+Taking out a hop routes the connections its new way crosses again among the rest, and the change stays only if all of them route; they searched only their own window, 5 mm beyond their pads, and on TokenBoard 42 of 156 attempts failed there. They now search six times as far. With `--profile fast`, TokenBoard and the ten boards below together: 1,592 vias in their own window, 1,509 three times as far, 1,492 six and twelve times; widening only where no way was found, four times at a time as negotiation does, 1,548: the wider window finds the room with fewer vias, not only some room. This machine, `default`, `--time-limit 90`, every board as complete, no rule broken that the board does not break:
+
+| Board | Vias before | **After** |
+| --- | --- | --- |
+| Sofle (Issue178) | 386 | **360** |
+| Issue034-Green14SegLED | 107 | **93** |
+| RelayModule | 52 | **40** |
+| ReadPlaceScope | 49 | **44** |
+| keyboard-tkl | 61 | **59** |
+| CNH, Issue015, bm04, 8088sbc | 64, 60, 42, 69 | the same |
+| Issue022-AutoRouter_interrupted | 79 | 83 |
+| all ten | 969 | **914** |
+
+TokenBoard without a limit: 261 vias instead of 270, in 140 s instead of 174 s.
+
+Measured and not built: the hop's own search, allowed to cross, three times as far too: 1,471 vias instead of 1,492 (`--profile fast`, TokenBoard and the ten), but TokenBoard 346 instead of 335 and Issue022 109 instead of 106, in 7 % more time: within how far the routing moves on small changes.
+
+## Routed in more rounds: the `thorough` profile (M5, TRX-84)
+
+Which price of running across a layer's direction suits a board differs as much as the price of a via does. A profile's `rounds` says how many rounds of routings side by side are made while time is left: the default's two (its prices, then vias twice as dear), then layer directions half as dear again and a third cheaper, at each price of a via. `thorough` is the default in six rounds. This machine, `thorough` with `--time-limit 900`, `default` with the corpus's 90 s (Issue034 reaches it), every board as complete:
+
+| Board | `default` vias | **`thorough`** | `default` time | `thorough` |
+| --- | --- | --- | --- | --- |
+| Sofle (Issue178) | 386 | **364** | 56 s | 120 s |
+| Issue230-CNH | 64 | **45** | 71 s | 153 s |
+| Issue034-Green14SegLED | 107 | **94** | 90 s | 99 s |
+| RelayModule | 52 | **43** | 37 s | 83 s |
+| Issue022-AutoRouter_interrupted | 79 | **70** | 70 s | 145 s |
+| keyboard-tkl, Issue217-8088sbc, Issue015 | 61, 69, 60 | **58, 66**, 60 | 62, 33, 47 s | 145, 65, 108 s |
+| ReadPlaceScope, DAC2020_bm04 | 49, 42 | **47, 41** | 12, 28 s | 32, 70 s |
+| all ten | 969 | **888** | 507 s | 1,018 s |
+
+TokenBoard without a limit gains nothing: 270 vias either way, in 427 s instead of 174 s.
+
+## Checks only where a step could gain (November 2026)
+
+Profiled on TokenBoard (one thread, gdb stack samples of a release build with line tables), the hop pass of [[TRX-76]] took 45 % of a routing, and finding out whether a via fits at a node a third of all the time. Every extra cost of a step is zero or more, so where a step's own price already reaches the best cost known for the state it leads to, the search now skips finding out whether the track or via fits: the step could not lower that cost. The sessions are the same to the byte; `--profile fast`, one thread, this machine: keyboard-tkl 7.1 s instead of 7.4 s, RelayModule 7.8 s instead of 9.0 s, Issue034 35.0 s instead of 41.9 s.
+
+The rest of the via check is four scans per via on TokenBoard, one per layer the via spans, planes included, with no early way out where it fits. Measured and not built: the hop pass's searches in a narrower window, 1 mm around the pads' box instead of the profile's 5 mm, made TokenBoard 147 s instead of 174 s but left 293 vias instead of 270, Sofle 402 instead of 386.
+
+## Lanes kept where trees grow (M5, TRX-83)
+
+Growing trees ([[TRX-76]]) could search a connection again from its pad to copper of its net nearby, after `continue_lanes` had routed it from the free end of the pad's lane of the board's wiring, and leave that end dangling: TokenBoard's GP0_UART_TX and LED_EN, in routings with other prices. A connection whose route goes on from such a free end now stays where it is. 120 sessions of the experiments above and 30 TokenBoard routings checked against their boards break no rule the board does not break itself.
+
+## Diagonals pay their layer's direction in full (M5, TRX-82)
+
+With layer directions a diagonal step paid half of what a straight step across its layer's direction pays, and long 45° runs crossed TokenBoard's keys on the layer meant to run the other way. A diagonal step now pays as much as a straight one across. This machine, `--time-limit 90`, every board as complete, no rule broken that the board did not break:
+
+| Board | Vias before | **After** |
+| --- | --- | --- |
+| Sofle (Issue178) | 401 | **386** |
+| Issue022-AutoRouter_interrupted | 97 | **79** |
+| Issue217-8088sbc | 73 | **69** |
+| Issue015-StackOverflow | 63 | **60** |
+| Issue230-CNH | 66 | **64** |
+| Issue034-Green14SegLED | 110 | **107** |
+| keyboard-tkl | 62 | **61** |
+| RelayModule, ReadPlaceScope, DAC2020_bm04 | 49, 48, 41 | 52, 49, 42 |
+| all ten | 1,010 | **969** |
+
+TokenBoard without a limit: 267 vias instead of 275. DAC2020_bm05 routes 103 of 107 connections instead of 104: at U27, a 0.4 mm QFN whose pins two connections reach in neither routing, U23-2 to U27-6 now finds no way either. The boards that reach the limit moved as such boards do from run to run: Mars-64 77 and 78 of 94 nets instead of 75 and 76, Issue066 238 of 266 instead of 228, LogicBoard 328 of 343 instead of 333, VGA 103 instead of 107, smoothieboard 234 instead of 239.
+
 ## Measured and not built: more ways to fewer vias on TokenBoard (November 2026)
 
 After [[TRX-80]] TokenBoard routes with 275 new vias without a limit (Freerouting: 199): 110 of them in pairs that hop under 10 mm of the other layer (Freerouting: 75), 165 single (124). By net: the rows 44 (21), the columns 126 (105), the MCU's small nets about 30 more. Tried on this machine, without a limit, each against 275:
@@ -59,6 +154,7 @@ After [[TRX-80]] TokenBoard routes with 275 new vias without a limit (Freeroutin
 - **Dearer vias still**: a via cost of 6 mm for the first round (12 for the second) 275, of 8 mm 300. The price of a via has done what it can.
 - **No layer directions while tidying**: tidying, taking out hops and growing trees with no direction cost 279, a quarter of it 275. ROW6's long run to the MCU hops six times either way: its way along the front copper is taken by other routes, not priced out.
 - **Dearer bends while growing trees**: the trees' search and its choice priced at 1 mm and 3 mm per 45° instead of 0.1 mm: 2,770 and 2,755 track segments instead of 2,807, but 278 and 279 vias. The sawtooth rows stay: their straight way is taken.
+- **Negotiating regions again**: for each connection with more vias than it needs, the routes within 1 mm of it (up to 40) taken out and negotiated again among themselves with vias twice as dear, tidied, and kept if all route with fewer vias: of 74 regions 3 kept, 7 vias fewer, in 216 s more; and connections of the trees that ended on the copper moved were left dangling.
 - **Fanning out from fine-pitch parts**: within 1.5 to 3 mm of the MCU's pads, a step along the side of the part paying half to twice its length more, so that tracks leave its sides straight: 273, 280 and 280 vias, the escapes tidier next to the part but the routes beyond it no better.
 
 ## Corpus baseline raised (November 2026)
