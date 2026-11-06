@@ -391,6 +391,7 @@ mod tests {
             track_width: 0,
             clearance: 0,
             via_kinds: vec![],
+            pair: None,
         }
     }
 

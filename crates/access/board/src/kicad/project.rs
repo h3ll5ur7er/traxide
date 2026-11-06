@@ -30,6 +30,9 @@ pub(crate) struct ClassRules {
     pub clearance: i32,
     pub via_diameter: i32,
     pub via_drill: i32,
+    /// The width of a differential pair's tracks, and the gap between them.
+    pub pair_width: i32,
+    pub pair_gap: i32,
 }
 
 /// The class of a net as a running KiCad states it, with the class's values
@@ -55,6 +58,8 @@ const DEFAULT_CLEARANCE: f64 = 0.2;
 const DEFAULT_TRACK_WIDTH: f64 = 0.2;
 const DEFAULT_VIA_DIAMETER: f64 = 0.6;
 const DEFAULT_VIA_DRILL: f64 = 0.3;
+const DEFAULT_PAIR_WIDTH: f64 = 0.2;
+const DEFAULT_PAIR_GAP: f64 = 0.25;
 const DEFAULT_EDGE_CLEARANCE: f64 = 0.5;
 const DEFAULT_HOLE_CLEARANCE: f64 = 0.25;
 /// What a new KiCad 10 project states as the narrowest track, the smallest
@@ -102,6 +107,8 @@ impl Project {
             clearance: nanometres(value(class, "clearance", DEFAULT_CLEARANCE)).max(min_clearance),
             via_diameter: nanometres(value(class, "via_diameter", DEFAULT_VIA_DIAMETER)),
             via_drill: nanometres(value(class, "via_drill", DEFAULT_VIA_DRILL)),
+            pair_width: nanometres(value(class, "diff_pair_width", DEFAULT_PAIR_WIDTH)),
+            pair_gap: nanometres(value(class, "diff_pair_gap", DEFAULT_PAIR_GAP)),
         };
         let mut classes = vec![rules_of(DEFAULT_CLASS, &default)];
         for class in &listed {
@@ -242,6 +249,8 @@ mod tests {
                 clearance: 200_000,
                 via_diameter: 600_000,
                 via_drill: 300_000,
+                pair_width: 200_000,
+                pair_gap: 250_000,
             }]
         );
         assert_eq!(project.edge_clearance, 500_000);
@@ -267,6 +276,21 @@ mod tests {
         assert_eq!(power.name, "Power");
         assert_eq!(power.track_width, 500_000);
         assert_eq!(power.via_diameter, 800_000);
+    }
+
+    #[test]
+    fn a_class_routes_differential_pairs_at_its_pair_width_and_gap() {
+        let project = Project::read(Some(
+            r#"{"net_settings": {"classes": [
+                {"name": "Default"},
+                {"name": "USB", "diff_pair_width": 0.3, "diff_pair_gap": 0.15}
+            ]}}"#,
+        ))
+        .expect("valid");
+        let pair_of = |class: &ClassRules| (class.pair_width, class.pair_gap);
+        // KiCad's own defaults where the project leaves them out.
+        assert_eq!(pair_of(&project.classes[0]), (200_000, 250_000));
+        assert_eq!(pair_of(&project.classes[1]), (300_000, 150_000));
     }
 
     #[test]

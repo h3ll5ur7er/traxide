@@ -531,6 +531,7 @@ impl<'a> DsnReader<'a> {
             track_width: width,
             clearance,
             via_kinds: default_vias.clone(),
+            pair: None,
         }];
         let mut class_of_net = HashMap::new();
         for class in self.root.required_child("network")?.children("class") {
@@ -562,6 +563,7 @@ impl<'a> DsnReader<'a> {
                 } else {
                     vias
                 },
+                pair: None,
             });
         }
         Ok(CompiledClasses {

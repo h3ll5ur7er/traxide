@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use traxide_contracts::geometry::{Point, Polygon, Rect, Region, Segment, Shape, Transform};
 use traxide_contracts::{
     Design, DesignRules, Keepout, KeepoutScope, Layer, LayerId, LayerShape, Net, NetClass,
-    NetClassId, NetId, Pad, Plane, Routes, Track, Via, ViaKind, ViaKindId,
+    NetClassId, NetId, Pad, PairGeometry, Plane, Routes, Track, Via, ViaKind, ViaKindId,
 };
 
 /// A board as read, with what storing routes into its file needs beyond the
@@ -232,6 +232,10 @@ impl<'a> Reader<'a> {
                 name: class.name,
                 track_width: class.track_width,
                 clearance: class.clearance,
+                pair: Some(PairGeometry {
+                    width: class.pair_width,
+                    gap: class.pair_gap,
+                }),
             })
             .collect();
         DesignRules {

@@ -22,6 +22,17 @@ pub struct ConstraintSet {
     track_width_limits_of_class: Vec<Limits>,
     /// Per class, how large across and how large a drill its vias may have.
     via_limits_of_class: Vec<ViaLimits>,
+    pairs: Vec<DifferentialPair>,
+}
+
+/// Two nets routed side by side as a differential pair, each track `width`
+/// wide, `gap` apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DifferentialPair {
+    pub positive: NetId,
+    pub negative: NetId,
+    pub width: i32,
+    pub gap: i32,
 }
 
 /// How large across, and how large a drill, a via may have.
@@ -57,7 +68,26 @@ impl ConstraintSet {
             hole_to_hole: 0,
             track_width_limits_of_class: Vec::new(),
             via_limits_of_class: Vec::new(),
+            pairs: Vec::new(),
         }
+    }
+
+    /// The board's differential pairs.
+    #[must_use]
+    pub fn with_pairs(mut self, pairs: Vec<DifferentialPair>) -> Self {
+        self.pairs = pairs;
+        self
+    }
+
+    pub fn pairs(&self) -> &[DifferentialPair] {
+        &self.pairs
+    }
+
+    /// The differential pair `net` is one of the two nets of.
+    pub fn pair_of(&self, net: NetId) -> Option<DifferentialPair> {
+        (self.pairs.iter())
+            .find(|pair| pair.positive == net || pair.negative == net)
+            .copied()
     }
 
     /// How far apart the holes of vias stay.

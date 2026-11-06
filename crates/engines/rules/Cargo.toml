@@ -10,5 +10,8 @@ repository.workspace = true
 [dependencies]
 traxide-contracts.workspace = true
 
+[dev-dependencies]
+traxide-contracts = { workspace = true, features = ["testing"] }
+
 [lints]
 workspace = true
