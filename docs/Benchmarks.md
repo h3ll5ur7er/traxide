@@ -58,6 +58,19 @@ Tidying, taking out hops and growing trees searched with vias 4 times as dear as
 
 Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095. Growing trees once more at the end, two-pad nets too, with a heuristic weight of 1 so routes pull tight: 1,084 vias, 0.7 % less track, but 1.3 % more corners and 17 % more time.
 
+## Shoving what is in the way (M5, TRX-37)
+
+After taking out hops, each connection negotiation left unrouted searches once more crossing routed connections, and what its way crosses routes again around it, two connections deep; it routes if all of them do. Given a time limit, negotiation stops at four fifths of it, tidying and taking out hops at nine tenths, and shoving has the rest. The 20 corpus boards CI left incomplete, each within 90 s, nets complete:
+
+| Routing | Nets complete |
+| --- | --- |
+| without shoving | 2,399 |
+| shoving before tidying, negotiation four fifths | 2,457 |
+| shoving after taking out hops, no time kept for it | 2,392 |
+| **shoving after taking out hops, the last tenth kept** | **2,470** |
+
+LogicBoard 342 of 343 instead of 331, Issue103 199 instead of 189, Issue066 239 instead of 226, smoothieboard 240 instead of 231, VGA 109 instead of 105, Protein 167 instead of 159, bm01 91 instead of 87; Issue208 238 instead of 244. No rule broken that the board does not break. Shoving before taking out hops cost vias: with `--profile fast` and no limit, bm01 kept 254 instead of 176, as what it squeezed in left the hop pass less room; after it, 191 vias, with 89 nets complete instead of 87. bm05's four connections stay unrouted: their ways cross what is in them, which then finds no way round out of U27's fine-pitch pads.
+
 ## A crossing priced as a whole (M5, TRX-92)
 
 CI's corpus run ([[TRX-91]]) showed CNH (Issue230) with 48 vias where Freerouting takes 5. Taking out hops priced crossing a routed connection per grid edge overlapped, an eighth of a via each: about a via across TokenBoard's 0.2 mm tracks and clearances, but two and more across CNH's 0.25 to 0.64 mm tracks with up to 0.64 mm clearance, so no wide track moved for a hop. A crossing now costs three eighths of a via, spread over the edges it overlaps from both tracks' widths and the clearance between their nets. With `--profile fast`, without a limit, TokenBoard and 28 corpus boards (vias, time):
