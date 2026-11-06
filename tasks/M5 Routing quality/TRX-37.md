@@ -2,7 +2,7 @@
 id: TRX-37
 title: Walk around and shove in the Detailed Routing Engine
 type: feature
-status: in-progress
+status: review
 assignee: claude
 priority: medium
 labels: [detailed-routing]
@@ -24,7 +24,8 @@ Negotiation rips up what is in a connection's way and leaves it unrouted until i
 - [ ] On bm05 (90 s) neither depth routes more: of its four connections left unrouted, the ways found cross what is in them, which then finds no way round the held new copper, or none out of U27's fine-pitch pads; one, two deep 50 of 54 nets as before. Pushing a track sideways, keeping its course, is what these need (walkaround, below)
 - [x] Failing tests: a track overlaps only routed copper it runs over, not copper too close (`a_track_overlaps_only_routed_copper_it_runs_over_not_copper_too_close`); a way that moves what it passes aside squeezes past rather than crossing (`a_way_that_moves_what_it_passes_aside_squeezes_past_rather_than_crossing`)
 - [x] Squeezing past instead of crossing: Layout Access tells the routed connections a track would run over from those it only comes too close to (`track_overlaps`); shoving prices crossing at a via, spread over the copper it runs over, and squeezing past for nothing (`SHOVE_CROSSING_EIGHTHS_OF_A_VIA`), so what is in the way moves beside its old way where it can; taking out hops prices both alike, as before. bm05 51 of 54 nets instead of 50 (U23-2 to U27-6 in U27's fine-pitch pads); the 20 boards within 90 s 2,473 nets instead of 2,470; bm01 with `--profile fast` 90 nets, 193 vias
-- [ ] bm05's last three, out of U27-8, U27-20 and U27-45, still find no way: why the shove fails there
-- [ ] Walkaround of octilinear segments proper: what is crossed moves beside the new way as offset segments, instead of being searched again
+- [x] bm05's last three, out of U27-8, U27-20 and U27-45: each way found squeezes past the escape of a neighbouring pin of U27 (connections 6, 5 and 1), which then finds no way out of its own pad, its exits taken by the new copper. Two neighbouring fine-pitch pins want the one escape channel between them; moving tracks sideways makes no second one, only one escaping on another layer would, for which the pitch leaves no room. Freerouting routes bm05's 54 nets 46 complete, breaking 17 rules
+
+Not built: walkaround of octilinear segments proper, what is crossed moving beside the new way as offset segments instead of being searched again. Squeezing past already moves what is in the way beside its old way where there is room, and where it fails on the corpus there is none.
 
 **Depends on:** [[TRX-27]]
