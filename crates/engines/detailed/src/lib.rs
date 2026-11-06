@@ -106,9 +106,10 @@ const MOST_HOP_PASSES: usize = 4;
 const SHOVE_DEPTH: usize = 2;
 
 /// Of the time routing is given, negotiation takes this many fifths, and
-/// leaves the rest to shoving what is in the way of what it left unrouted,
-/// and to tidying: on a board that reaches its limit, negotiation would
-/// otherwise take it all (TRX-37).
+/// leaves the rest to tidying and to shoving what is in the way of what it
+/// left unrouted, half each: on a board that reaches its limit, negotiation
+/// would otherwise take it all. Shoving comes after taking out hops, which
+/// what it squeezes in would leave less room (TRX-37).
 const NEGOTIATING_FIFTHS: u32 = 4;
 
 /// Past its deadline, routing searches for what is still queued for this
@@ -130,6 +131,9 @@ pub struct Router<'a> {
     /// When negotiation stops ripping up, leaving the rest of the time to
     /// what comes after it (NEGOTIATING_FIFTHS).
     negotiation_ends: Option<Instant>,
+    /// When tidying and taking out hops stop, leaving the rest of the time to
+    /// shoving.
+    tidying_ends: Option<Instant>,
     /// Whether the board's own copper cuts each connection asked about off,
     /// which no routing changes: a search for one cut off floods all it can
     /// reach, again on every attempt.
@@ -158,6 +162,7 @@ impl<'a> Router<'a> {
             deadline: None,
             searching_ends: None,
             negotiation_ends: None,
+            tidying_ends: None,
             cut_off: HashMap::new(),
         }
     }
@@ -177,7 +182,12 @@ impl<'a> Router<'a> {
         self.deadline = Some(deadline);
         self.searching_ends = Some(deadline + past);
         self.negotiation_ends = Some(negotiation_ends(now, deadline));
+        self.tidying_ends = Some(tidying_ends(now, deadline));
         self
+    }
+
+    fn is_past_tidying(&self) -> bool {
+        self.tidying_ends.is_some_and(|ends| Instant::now() >= ends)
     }
 
     fn is_past_negotiation(&self) -> bool {
@@ -376,6 +386,7 @@ impl<'a> Router<'a> {
             deadline: self.deadline,
             searching_ends: self.searching_ends,
             negotiation_ends: self.negotiation_ends,
+            tidying_ends: self.tidying_ends,
             cut_off: self.cut_off.clone(),
         }
     }
@@ -412,9 +423,6 @@ impl<'a> Router<'a> {
             }
         };
         if !cancel.is_cancelled() && !self.is_past_deadline() {
-            if !best.unrouted.is_empty() {
-                self.shove_aside_for_unrouted(&mut best, plan, layout, cancel);
-            }
             self.tidy(&mut best, plan, layout, cancel);
             let mut changed = None;
             for _ in 0..MOST_HOP_PASSES {
@@ -423,6 +431,9 @@ impl<'a> Router<'a> {
                     break;
                 }
                 changed = Some(moved);
+            }
+            if !best.unrouted.is_empty() {
+                self.shove_aside_for_unrouted(&mut best, plan, layout, cancel);
             }
             self.continue_lanes(&mut best, plan, layout, cancel);
             self.grow_trees(&mut best, plan, layout, cancel);
@@ -464,7 +475,7 @@ impl<'a> Router<'a> {
             ..self.finder
         };
         for (i, routed) in attempt.routed.iter_mut().enumerate() {
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_tidying() {
                 return;
             }
             let connection = plan.connections[i];
@@ -622,13 +633,13 @@ impl<'a> Router<'a> {
             .iter()
             .map(|&connection| self.fewest_vias(connection))
             .collect();
-        let deadline = self.deadline;
+        let tidying_ends = self.tidying_ends;
         let scratch = &mut self.scratches[0];
         let design = self.finder.design;
         let margin = self.finder.profile.detour_margin;
         let mut moved_areas = Vec::new();
         for (i, &fewest) in fewest_of.iter().enumerate() {
-            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+            if cancel.is_cancelled() || tidying_ends.is_some_and(|ends| Instant::now() >= ends) {
                 return Vec::new();
             }
             let connection = plan.connections[i];
@@ -1346,6 +1357,13 @@ impl Finder<'_> {
 /// (NEGOTIATING_FIFTHS).
 fn negotiation_ends(now: Instant, deadline: Instant) -> Instant {
     now + deadline.saturating_duration_since(now) * NEGOTIATING_FIFTHS / 5
+}
+
+/// When tidying stops, given until `deadline` from `now`: half way between
+/// negotiation's end and the deadline.
+fn tidying_ends(now: Instant, deadline: Instant) -> Instant {
+    let negotiated = negotiation_ends(now, deadline);
+    negotiated + deadline.saturating_duration_since(negotiated) / 2
 }
 
 /// Crossing routed connections at CROSSING_EIGHTHS_OF_A_VIA of a via of
@@ -2117,5 +2135,13 @@ mod tests {
             now + Duration::from_secs(8)
         );
         assert_eq!(negotiation_ends(deadline, now), deadline);
+    }
+
+    #[test]
+    fn tidying_leaves_the_last_tenth_of_the_time_given_to_shoving() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert_eq!(tidying_ends(now, deadline), now + Duration::from_secs(9));
+        assert_eq!(tidying_ends(deadline, now), deadline);
     }
 }
