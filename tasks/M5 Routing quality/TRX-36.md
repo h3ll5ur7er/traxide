@@ -2,7 +2,7 @@
 id: TRX-36
 title: Optimise routes in the Optimization Engine
 type: feature
-status: in-progress
+status: review
 assignee: claude
 priority: medium
 labels: [optimization]
@@ -13,10 +13,10 @@ layer: engine
 [[Architecture/Routing-pipeline#optimise]]; UC4 *optimise an existing routing* in the Routing Manager.
 
 - [x] Pull-tight: `traxide-optimization`'s `pull_tight`, run by the Routing Manager as the stage *Optimising* after routing and the plane joins. Each new track's runs of corners are replaced by the shortest octilinear way between their ends (straight, or a diagonal and a straight stretch) where it fits in the layout, the longest run first, with no corner sharper than 90°; the track's ends and the vias stay, so nothing joined comes apart. Passes repeat while any track changes, at most four
-- [ ] 45° mitering of the right angles routing leaves: few remain after pull-tight (2 of 658 corners on ReadPlaceScope)
-- [ ] Stub removal: escape stubs are already trimmed to the copper that uses them ([[TRX-56]])
-- [ ] Via-pair removal and layer reassignment
-- [ ] Region-parallel on copy-on-write snapshots; a move is kept only if it improves and adds no violation
+- [x] Stub removal: escape stubs are trimmed to the copper that uses them ([[TRX-56]])
+- [x] Via-pair removal and layer reassignment: built in the Detailed Routing Engine instead, where the copper a hop passes under can move: tidying with dearer vias ([[TRX-72]], [[TRX-88]]), taking out hops ([[TRX-76]], [[TRX-85]], [[TRX-87]], [[TRX-92]]) and growing trees ([[TRX-90]], [[TRX-93]]); TokenBoard 335 vias to 218, the author's Freerouting routing 199
+
+Not built, as nothing calls for them: 45° mitering of the right angles routing leaves, of which pull-tight leaves few (2 of 658 corners on ReadPlaceScope); region-parallel optimisation on copy-on-write snapshots, as pull-tight's time is lost in the noise of routing's.
 
 **Depends on:** [[TRX-27]], [[TRX-19]]
 
