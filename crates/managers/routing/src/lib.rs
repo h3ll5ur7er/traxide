@@ -235,6 +235,13 @@ fn nets_to_route(design: &Design, nets: &Nets) -> Result<Vec<bool>, RouteError> 
     Ok(chosen)
 }
 
+/// `design` with `routes` as its own wiring.
+fn with_wiring(design: &Design, routes: &Routes) -> Design {
+    let mut design = design.clone();
+    design.existing.extend(routes.clone());
+    design
+}
+
 /// `design` with the planes only of the nets routed, as the others get no
 /// copper.
 fn with_planes_of(design: &Design, is_routed: impl Fn(NetId) -> bool) -> Design {
@@ -280,7 +287,27 @@ pub fn route(
     let mut layout = Layout::build(&joins.design, &rules);
     let mut plan = traxide_planning::plan(&joins.design);
     plan.connections.retain(|c| is_routed(c.net));
-    let escaped = traxide_planning::escape(&joins.design, &rules, &plan, &mut layout);
+    // Differential pairs route first, side by side, and stay as the board's
+    // own wiring would: no connection is planned where they join the pads,
+    // and nothing rips them up.
+    let coupled = traxide_planning::coupled(&joins.design, &rules, &plan);
+    let mut paired = Routes::default();
+    let mut connections_paired = 0;
+    for routes in
+        traxide_detailed::route_pairs(&joins.design, &rules, &profile, &coupled, &mut layout)
+            .into_iter()
+            .flatten()
+    {
+        connections_paired += 2;
+        paired.extend(routes);
+    }
+    let with_pairs = with_wiring(&joins.design, &paired);
+    if connections_paired > 0 {
+        layout = Layout::build(&with_pairs, &rules);
+        plan = traxide_planning::plan(&with_pairs);
+        plan.connections.retain(|c| is_routed(c.net));
+    }
+    let escaped = traxide_planning::escape(&with_pairs, &rules, &plan, &mut layout);
     // Built anew, the layout holds the escapes as pads of their nets, which
     // rip-up can never take from them.
     let (plan, mut layout) = (&escaped.plan, Layout::build(&escaped.design, &rules));
@@ -289,7 +316,7 @@ pub fn route(
         traxide_global::route(&escaped.design, plan, &rules, &profile)
     });
     events.publish(Event::StageStarted(Stage::Routing));
-    let total = plan.connections.len();
+    let total = plan.connections.len() + connections_paired;
     let threads = job
         .threads
         .or_else(|| std::thread::available_parallelism().ok())
@@ -312,6 +339,7 @@ pub fn route(
     let mut total = total;
     if !cancel.is_cancelled() {
         let mut everything = design.existing.clone();
+        everything.extend(paired.clone());
         everything.extend(routes.clone());
         let verdict = traxide_verification::verify(&design, &verification_rules, &everything);
         let mut to_join = plane_pads_to_join(&design, &verdict);
@@ -333,8 +361,13 @@ pub fn route(
     let mut routes = routes.without_repeated_vias(&design.existing);
     if !cancel.is_cancelled() {
         events.publish(Event::StageStarted(Stage::Optimising));
-        routes = traxide_optimization::pull_tight(&routes, &mut Layout::build(&design, &rules));
+        // The pairs stay as routed: pulled tight one at a time, their
+        // tracks would no longer run side by side.
+        let with_paired = with_wiring(&design, &paired);
+        routes =
+            traxide_optimization::pull_tight(&routes, &mut Layout::build(&with_paired, &rules));
     }
+    routes.extend(paired);
     let at_pins = |connections: Vec<Connection>| -> Vec<Connection> {
         connections
             .into_iter()

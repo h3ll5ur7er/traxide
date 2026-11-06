@@ -10,9 +10,11 @@
 mod grid;
 mod history;
 mod lanes;
+mod pairs;
 mod path;
 mod search;
 
+pub use pairs::route_pairs;
 use search::NoRoute;
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap, VecDeque};

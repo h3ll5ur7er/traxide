@@ -26,7 +26,7 @@ pub use design::{
 pub use events::{Event, Stage};
 pub use ids::{ConnectionId, LayerId, NetClassId, NetId, PadId, ViaKindId};
 pub use layout::{LayoutAccess, Obstruction};
-pub use plan::{Connection, Plan};
+pub use plan::{Connection, CoupledConnections, Plan};
 pub use profile::Profile;
 pub use routes::{Routes, RoutingResult, Track, Via};
 pub use traxide_geometry as geometry;

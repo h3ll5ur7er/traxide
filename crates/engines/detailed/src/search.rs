@@ -217,6 +217,11 @@ pub(crate) struct Search<'a, L> {
     /// The box around each pad and the copper joined to it, where some is.
     joined_boxes: [Option<Rect>; 2],
     directions: Directions,
+    /// Where the search is for a differential pair's centre line: the
+    /// diameter of the disc its two vias fit in, whichever way they stand.
+    /// A change of layers is checked as that disc, costs two vias, and never
+    /// goes through a via of the net already there, which carries one track.
+    pair_vias: Option<i32>,
 }
 
 /// Which way each layer's tracks run, and what a step across that costs.
@@ -274,6 +279,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             joined: [&[], &[]],
             joined_boxes: [None, None],
             directions: Directions::default(),
+            pair_vias: None,
         }
     }
 
@@ -283,6 +289,30 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         Self {
             directions,
             ..*self
+        }
+    }
+
+    /// The same search for a track `width` wide, as a pair's two tracks and
+    /// the gap between them are.
+    pub(crate) fn with_width(&self, width: i32) -> Self {
+        Self { width, ..*self }
+    }
+
+    /// The same search for a differential pair's centre line, whose changes
+    /// of layer take two vias side by side, which fit in a disc `diameter`
+    /// across.
+    pub(crate) fn with_pair_vias(&self, diameter: i32) -> Self {
+        Self {
+            pair_vias: Some(diameter),
+            ..*self
+        }
+    }
+
+    /// What changing layers costs: a via, or two for a pair.
+    fn via_price(&self) -> i64 {
+        match self.pair_vias {
+            Some(_) => 2 * self.profile.via_cost,
+            None => self.profile.via_cost,
         }
     }
 
@@ -614,7 +644,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         layer: layer.0,
                         heading: UNSET,
                     };
-                    if cannot_improve(next, self.profile.via_cost, scratch) {
+                    if cannot_improve(next, self.via_price(), scratch) {
                         continue;
                     }
                     let check = self.grid.index(state.node) * self.via_kinds.len() + position;
@@ -627,20 +657,17 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         self.via_extra(&via).unwrap_or(BLOCKED)
                     });
                     if extra != BLOCKED {
-                        relax(
-                            Some(next),
-                            self.profile.via_cost + extra,
-                            Some(kind),
-                            scratch,
-                        );
+                        relax(Some(next), self.via_price() + extra, Some(kind), scratch);
                     }
                 }
             }
             // At a via's price, though the via is there: for free, paths
             // crowd through the board's vias and take each other's room.
-            self.relax_through_existing_vias(state, &joins, |next| {
-                relax(Some(next), self.profile.via_cost, None, scratch);
-            });
+            if self.pair_vias.is_none() {
+                self.relax_through_existing_vias(state, &joins, |next| {
+                    relax(Some(next), self.profile.via_cost, None, scratch);
+                });
+            }
         }
         None
     }
@@ -789,6 +816,12 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     }
 
     fn via_extra(&self, via: &Via) -> Option<i64> {
+        if let Some(diameter) = self.pair_vias {
+            let at = Segment::new(via.position, via.position);
+            return (self.design.via_kind(via.kind).copper.iter())
+                .all(|c| self.layout.is_track_clear(self.net, c.layer, at, diameter))
+                .then_some(0);
+        }
         if self.ignores_routed_copper {
             return (self.layout.via_obstruction(via) != Obstruction::Fixed).then_some(0);
         }

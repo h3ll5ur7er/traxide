@@ -1,14 +1,17 @@
 //! Planning Engine: how the work is planned (volatility V5 of
 //! docs/Architecture/Volatilities.md). For now: a minimum spanning tree per net,
 //! connections from hemmed-in pads first, then shortest first; vias that join
-//! pads to their net's planes; and stubs that escape the pins of fine-pitch
-//! parts before anything is routed.
+//! pads to their net's planes; stubs that escape the pins of fine-pitch
+//! parts before anything is routed; and the connections of differential pairs
+//! that run side by side, to be routed as one.
 
 mod escape;
 mod existing;
+mod pairs;
 mod planes;
 
 pub use escape::{Escaped, escape};
+pub use pairs::coupled;
 pub use planes::{PlaneJoins, join_planes};
 
 use traxide_contracts::geometry::Point;

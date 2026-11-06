@@ -17,6 +17,20 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Differential pairs routed side by side (M5, TRX-38)
+
+TokenBoard's USB pair, USB_D_P and USB_D_N in the USB class (0.2 mm tracks, 0.25 mm apart), ran nowhere near each other: routed within 90 s, no stretch of either lay within 0.45 ± 0.05 mm of the other on its layer. The board's author coupled about a third: of USB_D_P's 155 mm, 38 mm within 0.4 to 0.7 mm of USB_D_N. Each pair's connections that start beside each other and end beside each other are now routed first, as one centre line 0.65 mm wide split into the two tracks, with two vias side by side where it changes layers; they stay as the board's own wiring. Where the pads at one end leave no room to fan in, as among the MCU's fan-out at R6 and R7, the tracks stop at the launch point in front of them and the router joins each pad there. This machine, `--time-limit 90`:
+
+| TokenBoard | Before | **Coupled** |
+| --- | --- | --- |
+| USB_D_P within 0.45 ± 0.05 mm of USB_D_N | 0 mm | **72 mm of 91 (79 %)** |
+| USB_D_N within 0.45 ± 0.05 mm of USB_D_P | 0 mm | **71 mm of 90 (79 %)** |
+| Vias | 241 | **238** |
+| Track | 12,538 mm | 12,607 mm |
+| Nets complete, rules broken | 241 of 241, none | 241 of 241, none |
+
+Coupled: U3 to J2 (31 mm) and J2 to R6 and R7 (100 mm), the latter through two pairs of vias. Not coupled: J1's two rows (A6 to B6, A7 to B7) and U3's pins on its two sides, connections between pins of one part.
+
 ## Hops taken out by moving what they pass (M5, TRX-76)
 
 Routed by Freerouting, TokenBoard has 199 new vias; routed by traxide, 446, with the same length of track. 250 of traxide's are in pairs that hop under 6 mm of the other layer to pass another track (Freerouting: 44). After tidying, each connection with more vias than it needs is searched again with vias four times dearer, allowed to cross routed connections at a quarter of a via per grid edge it overlaps them; what it crosses routes again among the rest, crossing nothing, and the change stays only if all of them route and their vias together fall. A second pass tries only connections near what moved. This machine, `--time-limit 90`, every board as complete as before and no rule broken that main does not break:
