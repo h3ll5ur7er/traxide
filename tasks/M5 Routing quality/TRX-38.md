@@ -18,7 +18,7 @@ For USB D+/D− first.
 - [x] Coupled routing: one centre line as wide as both tracks and the gap, from launch points in front of the pads, split into two tracks; fan-ins straight to the pad's edge and at 45°; two vias side by side at a change of layers, farther apart where the line turns; held as the board's own wiring (`traxide_detailed::route_pairs`)
 - [x] Where one end leaves no room to fan in, the tracks stop at its launch point and the router joins the pads there
 - [x] TokenBoard within 90 s: the USB pair 79 % coupled instead of 0 %, 238 vias instead of 241, every net complete, no rule broken ([[Benchmarks]])
-- [ ] The corpus gate passes
+- [x] The corpus gate passes (Benchmark run 177)
 - [ ] Pose-based coupled A* (position and heading), so that a pair need not leave its pads square to them
 - [ ] Stitching vias next to layer changes
 
