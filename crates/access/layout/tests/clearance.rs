@@ -358,3 +358,28 @@ fn a_via_keeps_the_hole_to_hole_distance_but_may_sit_on_a_via_of_its_net() {
         assert!(layout.is_via_clear(&via(10.6)));
     });
 }
+
+#[test]
+fn a_track_overlaps_only_routed_copper_it_runs_over_not_copper_too_close() {
+    // B's track runs up the middle of the board. A track across it overlaps
+    // it; one alongside, 0.3 mm from its centre, comes closer than the
+    // clearance but overlaps nothing.
+    check(&board(), |layout, a, b| {
+        layout.add_route(
+            ConnectionId(4),
+            &track_of(b, segment(at(10.0, 1.0), at(10.0, 9.0))),
+        );
+        let across = segment(at(8.0, 5.0), at(12.0, 5.0));
+        let alongside = segment(at(10.3, 2.0), at(10.3, 8.0));
+        assert_eq!(
+            layout.track_overlaps(a, TOP, across, mm(0.2)),
+            [ConnectionId(4)]
+        );
+        assert_ne!(
+            layout.track_obstruction(a, TOP, alongside, mm(0.2)),
+            Obstruction::None
+        );
+        assert_eq!(layout.track_overlaps(a, TOP, alongside, mm(0.2)), []);
+        assert_eq!(layout.track_overlaps(b, TOP, across, mm(0.2)), []);
+    });
+}

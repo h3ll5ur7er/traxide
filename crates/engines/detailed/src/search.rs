@@ -172,9 +172,12 @@ pub(crate) enum Present<'a> {
     /// Moving what is crossed aside: this much for crossing a connection, of
     /// the net `nets` gives for it, however wide the two tracks and the
     /// clearance between them, spread over the edges the crossing overlaps
-    /// it; never crossing one that `held` holds.
+    /// it; `squeeze` for only coming closer to one than the clearance, which
+    /// it may then move aside beside its old way, where crossing it leaves it
+    /// a way round the new copper only; never crossing one that `held` holds.
     PerCrossing {
         price: i64,
+        squeeze: i64,
         nets: &'a [NetId],
         held: &'a [bool],
     },
@@ -766,8 +769,19 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 let obstruction = self
                     .layout
                     .track_obstruction(self.net, layer, segment, self.width);
+                let overlapped = match (&obstruction, negotiation.present) {
+                    (Obstruction::Routed(_), Some(Present::PerCrossing { price, squeeze, .. }))
+                        if squeeze < price =>
+                    {
+                        Some(
+                            self.layout
+                                .track_overlaps(self.net, layer, segment, self.width),
+                        )
+                    }
+                    _ => None,
+                };
                 Some(
-                    self.rip_up_price(negotiation, obstruction)?
+                    self.rip_up_price(negotiation, obstruction, overlapped.as_deref())?
                         + negotiation.history.of_track(layer, segment),
                 )
             }
@@ -788,7 +802,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     .iter()
                     .map(|c| c.layer);
                 Some(
-                    self.rip_up_price(negotiation, self.layout.via_obstruction(via))?
+                    self.rip_up_price(negotiation, self.layout.via_obstruction(via), None)?
                         + negotiation.history.of_via(via, layers),
                 )
             }
@@ -798,21 +812,51 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     /// Each crossed connection costs more the more often it was ripped up before,
     /// so that connections settle instead of taking turns (negotiated congestion's
     /// history cost); one ripped up too often may not be crossed again.
-    fn rip_up_price(&self, negotiation: Negotiation, obstruction: Obstruction) -> Option<i64> {
+    /// Where `overlapped` names the connections the step runs over, the
+    /// others it only comes too close to are squeezed past (`Present`); where
+    /// it is `None`, all are crossed.
+    fn rip_up_price(
+        &self,
+        negotiation: Negotiation,
+        obstruction: Obstruction,
+        overlapped: Option<&[ConnectionId]>,
+    ) -> Option<i64> {
         match obstruction {
             Obstruction::None => Some(0),
             Obstruction::Fixed => None,
             Obstruction::Routed(connections) if negotiation.present.is_some() => {
                 Some(match negotiation.present? {
                     Present::PerEdge(price) => price * connections.len() as i64,
-                    Present::PerCrossing { price, nets, held } => {
+                    Present::PerCrossing {
+                        price,
+                        squeeze,
+                        nets,
+                        held,
+                    } => {
                         if connections.iter().any(|c| held[c.index()]) {
                             return None;
                         }
                         connections
                             .iter()
                             .map(|c| {
-                                price * self.profile_pitch() / self.crossing_span(nets[c.index()])
+                                let theirs = nets[c.index()];
+                                let pitch = self.profile_pitch();
+                                match overlapped {
+                                    // Crossing and squeezing priced alike: the
+                                    // whole band within the clearance pays.
+                                    None => price * pitch / self.crossing_span(theirs),
+                                    // Only the edges running over their copper
+                                    // cross; those beside it squeeze past.
+                                    Some(o) if o.contains(c) => {
+                                        price * pitch / self.overlap_span(theirs)
+                                    }
+                                    Some(_) => {
+                                        squeeze * pitch
+                                            / (self.crossing_span(theirs)
+                                                - self.overlap_span(theirs))
+                                            .max(pitch)
+                                    }
+                                }
                             })
                             .sum()
                     }
@@ -840,6 +884,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             + i64::from(self.rules.track_width(theirs))
             + 2 * i64::from(self.rules.clearance(Some(self.net), Some(theirs)));
         span.max(self.profile_pitch())
+    }
+
+    /// How far a track of this connection runs over one of `theirs` it
+    /// crosses at right angles: both widths, a grid edge at least.
+    fn overlap_span(&self, theirs: NetId) -> i64 {
+        (i64::from(self.width) + i64::from(self.rules.track_width(theirs)))
+            .max(self.profile_pitch())
     }
 
     fn profile_pitch(&self) -> i64 {
@@ -1415,6 +1466,111 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(scratch.expanded.len(), distinct.len());
+    }
+
+    #[test]
+    fn a_way_that_moves_what_it_passes_aside_squeezes_past_rather_than_crossing() {
+        // B's track stands across A's straight way, crossing it dearer than
+        // going round its end. Squeezing past for nothing, A passes the end
+        // closer than the clearance, which B may then make way for, but runs
+        // over none of it; squeezing priced as crossing, it keeps clear.
+        let design = DesignBuilder::new(20.0, 10.0)
+            .layers(1)
+            .without_vias()
+            .smd("A1", Some("A"), at(5.0, 5.0), 0.4, 0)
+            .smd("A2", Some("A"), at(15.0, 5.0), 0.4, 0)
+            .smd("B1", Some("B"), at(1.0, 1.0), 0.4, 0)
+            .smd("B2", Some("B"), at(1.0, 9.0), 0.4, 0)
+            .build();
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let mut layout = traxide_layout_access::Layout::build(&design, &rules);
+        let (a, b) = (design.net_named("A"), design.net_named("B"));
+        let width = rules.track_width(b);
+        layout.add_route(
+            ConnectionId::from_index(0),
+            &Routes {
+                tracks: vec![traxide_contracts::Track {
+                    net: b,
+                    layer: LayerId(0),
+                    width,
+                    path: vec![at(10.0, 3.0), at(10.0, 7.0)],
+                }],
+                vias: Vec::new(),
+            },
+        );
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 10,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction: 0.0,
+            rounds: 1,
+        };
+        let connection = Connection {
+            net: a,
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let (rip_ups, history) = ([0], History::new(&design, 0));
+        let (nets, held) = ([b], [false]);
+        let way = |squeeze: i64| {
+            let negotiation = Negotiation {
+                rip_ups: &rip_ups,
+                history: &history,
+                present: Some(Present::PerCrossing {
+                    price: 2 * profile.via_cost,
+                    squeeze,
+                    nets: &nets,
+                    held: &held,
+                }),
+            };
+            let search = Search::new(
+                &design,
+                &rules,
+                &profile,
+                connection,
+                &layout,
+                Some(negotiation),
+                None,
+            );
+            let steps = search.run(&mut Scratch::default()).expect("a way");
+            path::to_routes(&steps, a, width)
+        };
+        let segments = |routes: &Routes| -> Vec<Segment> {
+            (routes.tracks.iter())
+                .flat_map(|t| t.path.windows(2).map(|w| Segment::new(w[0], w[1])))
+                .collect()
+        };
+        let squeezed = way(0);
+        assert!(
+            segments(&squeezed)
+                .iter()
+                .all(|&s| layout.track_overlaps(a, LayerId(0), s, width).is_empty())
+        );
+        assert!(
+            segments(&squeezed)
+                .iter()
+                .any(|&s| layout.track_obstruction(a, LayerId(0), s, width) != Obstruction::None)
+        );
+        let kept_clear = way(2 * profile.via_cost);
+        assert!(segments(&kept_clear).iter().all(|&s| layout.is_track_clear(
+            a,
+            LayerId(0),
+            s,
+            width
+        )));
     }
 
     #[test]

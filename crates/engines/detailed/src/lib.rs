@@ -105,6 +105,15 @@ const MOST_HOP_PASSES: usize = 4;
 /// this many connections deep (TRX-37).
 const SHOVE_DEPTH: usize = 2;
 
+/// Shoving, crossing a routed connection costs this many eighths of a via,
+/// and squeezing past one, coming closer than the clearance without running
+/// over its copper, nothing: what is crossed has to find a way round the new
+/// copper, what is squeezed past only moves beside its old way. On bm05,
+/// squeezing for nothing routed U23-2 to U27-6 in U27's fine-pitch pads; on
+/// the 20 corpus boards CI left incomplete, each within 90 s, 2,473 nets
+/// complete instead of 2,470 (TRX-37).
+const SHOVE_CROSSING_EIGHTHS_OF_A_VIA: i64 = 8;
+
 /// Of the time routing is given, negotiation takes this many fifths, and
 /// leaves the rest to tidying and to shoving what is in the way of what it
 /// left unrouted, half each: on a board that reaches its limit, negotiation
@@ -522,8 +531,14 @@ impl<'a> Router<'a> {
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
         let nothing_held = vec![false; attempt.routed.len()];
-        let crossing =
-            crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets, &nothing_held);
+        let crossing = crossing_moved_aside(
+            &dearer,
+            &no_rip_ups,
+            &no_history,
+            &nets,
+            &nothing_held,
+            true,
+        );
         let mover = Mover {
             room_finder: &room_finder,
             plan,
@@ -531,6 +546,7 @@ impl<'a> Router<'a> {
             no_rip_ups: &no_rip_ups,
             no_history: &no_history,
             nets: &nets,
+            squeezing: true,
         };
         let deadline = self.deadline;
         let scratch = &mut self.scratches[0];
@@ -618,8 +634,14 @@ impl<'a> Router<'a> {
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
         let nothing_held = vec![false; attempt.routed.len()];
-        let crossing =
-            crossing_moved_aside(&dearer, &no_rip_ups, &no_history, &nets, &nothing_held);
+        let crossing = crossing_moved_aside(
+            &dearer,
+            &no_rip_ups,
+            &no_history,
+            &nets,
+            &nothing_held,
+            false,
+        );
         let mover = Mover {
             room_finder: &room_finder,
             plan,
@@ -627,6 +649,7 @@ impl<'a> Router<'a> {
             no_rip_ups: &no_rip_ups,
             no_history: &no_history,
             nets: &nets,
+            squeezing: false,
         };
         let fewest_of: Vec<usize> = plan
             .connections
@@ -1368,19 +1391,28 @@ fn tidying_ends(now: Instant, deadline: Instant) -> Instant {
 
 /// Crossing routed connections at CROSSING_EIGHTHS_OF_A_VIA of a via of
 /// `profile` each, whatever their rip-ups and history, as what is crossed
-/// moves aside then.
+/// moves aside then; `squeezing`, crossing at SHOVE_CROSSING_EIGHTHS_OF_A_VIA
+/// and squeezing past for nothing.
 fn crossing_moved_aside<'a>(
     profile: &Profile,
     rip_ups: &'a [u32],
     history: &'a history::History,
     nets: &'a [NetId],
     held: &'a [bool],
+    squeezing: bool,
 ) -> search::Negotiation<'a> {
+    let (price, squeeze) = if squeezing {
+        (profile.via_cost * SHOVE_CROSSING_EIGHTHS_OF_A_VIA / 8, 0)
+    } else {
+        let price = profile.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8;
+        (price, price)
+    };
     search::Negotiation {
         rip_ups,
         history,
         present: Some(search::Present::PerCrossing {
-            price: profile.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
+            price,
+            squeeze,
             nets,
             held,
         }),
@@ -1397,6 +1429,9 @@ struct Mover<'f, 'a> {
     no_rip_ups: &'f [u32],
     no_history: &'f history::History,
     nets: &'f [NetId],
+    /// Whether what moves aside squeezes past what it only comes close to,
+    /// at a lower price than crossing it.
+    squeezing: bool,
 }
 
 impl Mover<'_, '_> {
@@ -1449,6 +1484,7 @@ impl Mover<'_, '_> {
                 self.no_history,
                 self.nets,
                 &held_now,
+                self.squeezing,
             );
             let route = self
                 .room_finder

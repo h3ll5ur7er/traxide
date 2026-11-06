@@ -22,6 +22,9 @@ Negotiation rips up what is in a connection's way and leaves it unrouted until i
 - [x] A failing test: a shoved connection shoves another in turn (`a_shoved_connection_shoves_another_in_turn`)
 - [x] Deeper shoves: what moves aside may cross others in turn, which move aside so too, to `SHOVE_DEPTH` (2); what the move has placed already is held and never crossed (`search::Present::PerCrossing::held`), and a failed move is taken back whole (`undo`). Taking out hops stays one deep, its results the same
 - [ ] On bm05 (90 s) neither depth routes more: of its four connections left unrouted, the ways found cross what is in them, which then finds no way round the held new copper, or none out of U27's fine-pitch pads; one, two deep 50 of 54 nets as before. Pushing a track sideways, keeping its course, is what these need (walkaround, below)
-- [ ] Walkaround of octilinear segments: what is crossed moves beside the new way, keeping its course, instead of being searched again
+- [x] Failing tests: a track overlaps only routed copper it runs over, not copper too close (`a_track_overlaps_only_routed_copper_it_runs_over_not_copper_too_close`); a way that moves what it passes aside squeezes past rather than crossing (`a_way_that_moves_what_it_passes_aside_squeezes_past_rather_than_crossing`)
+- [x] Squeezing past instead of crossing: Layout Access tells the routed connections a track would run over from those it only comes too close to (`track_overlaps`); shoving prices crossing at a via, spread over the copper it runs over, and squeezing past for nothing (`SHOVE_CROSSING_EIGHTHS_OF_A_VIA`), so what is in the way moves beside its old way where it can; taking out hops prices both alike, as before. bm05 51 of 54 nets instead of 50 (U23-2 to U27-6 in U27's fine-pitch pads); the 20 boards within 90 s 2,473 nets instead of 2,470; bm01 with `--profile fast` 90 nets, 193 vias
+- [ ] bm05's last three, out of U27-8, U27-20 and U27-45, still find no way: why the shove fails there
+- [ ] Walkaround of octilinear segments proper: what is crossed moves beside the new way as offset segments, instead of being searched again
 
 **Depends on:** [[TRX-27]]
