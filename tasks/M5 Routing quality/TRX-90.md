@@ -2,7 +2,7 @@
 id: TRX-90
 title: Connections that meet at a pad they share do not hold each other in place
 type: bug
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

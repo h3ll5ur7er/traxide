@@ -50,7 +50,7 @@ pub(crate) struct Scratch {
     finish_stub: Stamped<Stub>,
     /// Every state expanded, in order, for tests to look into a search.
     #[cfg(test)]
-    expanded: Vec<u32>,
+    pub(crate) expanded: Vec<u32>,
 }
 
 /// A state of the search: a node, a layer and the heading it was entered with.
@@ -169,10 +169,18 @@ pub(crate) enum Present<'a> {
     /// Negotiating in rounds: this much for each grid edge and each
     /// connection overlapped.
     PerEdge(i64),
-    /// Taking out hops: this much for crossing a connection, of the net
-    /// `nets` gives for it, however wide the two tracks and the clearance
-    /// between them, spread over the edges the crossing overlaps it.
-    PerCrossing { price: i64, nets: &'a [NetId] },
+    /// Moving what is crossed aside: this much for crossing a connection, of
+    /// the net `nets` gives for it, however wide the two tracks and the
+    /// clearance between them, spread over the edges the crossing overlaps
+    /// it; `squeeze` for only coming closer to one than the clearance, which
+    /// it may then move aside beside its old way, where crossing it leaves it
+    /// a way round the new copper only; never crossing one that `held` holds.
+    PerCrossing {
+        price: i64,
+        squeeze: i64,
+        nets: &'a [NetId],
+        held: &'a [bool],
+    },
 }
 
 pub(crate) struct Search<'a, L> {
@@ -209,6 +217,11 @@ pub(crate) struct Search<'a, L> {
     /// The box around each pad and the copper joined to it, where some is.
     joined_boxes: [Option<Rect>; 2],
     directions: Directions,
+    /// Where the search is for a differential pair's centre line: the
+    /// diameter of the disc its two vias fit in, whichever way they stand.
+    /// A change of layers is checked as that disc, costs two vias, and never
+    /// goes through a via of the net already there, which carries one track.
+    pair_vias: Option<i32>,
 }
 
 /// Which way each layer's tracks run, and what a step across that costs.
@@ -266,6 +279,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             joined: [&[], &[]],
             joined_boxes: [None, None],
             directions: Directions::default(),
+            pair_vias: None,
         }
     }
 
@@ -275,6 +289,30 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
         Self {
             directions,
             ..*self
+        }
+    }
+
+    /// The same search for a track `width` wide, as a pair's two tracks and
+    /// the gap between them are.
+    pub(crate) fn with_width(&self, width: i32) -> Self {
+        Self { width, ..*self }
+    }
+
+    /// The same search for a differential pair's centre line, whose changes
+    /// of layer take two vias side by side, which fit in a disc `diameter`
+    /// across.
+    pub(crate) fn with_pair_vias(&self, diameter: i32) -> Self {
+        Self {
+            pair_vias: Some(diameter),
+            ..*self
+        }
+    }
+
+    /// What changing layers costs: a via, or two for a pair.
+    fn via_price(&self) -> i64 {
+        match self.pair_vias {
+            Some(_) => 2 * self.profile.via_cost,
+            None => self.profile.via_cost,
         }
     }
 
@@ -606,7 +644,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         layer: layer.0,
                         heading: UNSET,
                     };
-                    if cannot_improve(next, self.profile.via_cost, scratch) {
+                    if cannot_improve(next, self.via_price(), scratch) {
                         continue;
                     }
                     let check = self.grid.index(state.node) * self.via_kinds.len() + position;
@@ -619,20 +657,17 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                         self.via_extra(&via).unwrap_or(BLOCKED)
                     });
                     if extra != BLOCKED {
-                        relax(
-                            Some(next),
-                            self.profile.via_cost + extra,
-                            Some(kind),
-                            scratch,
-                        );
+                        relax(Some(next), self.via_price() + extra, Some(kind), scratch);
                     }
                 }
             }
             // At a via's price, though the via is there: for free, paths
             // crowd through the board's vias and take each other's room.
-            self.relax_through_existing_vias(state, &joins, |next| {
-                relax(Some(next), self.profile.via_cost, None, scratch);
-            });
+            if self.pair_vias.is_none() {
+                self.relax_through_existing_vias(state, &joins, |next| {
+                    relax(Some(next), self.profile.via_cost, None, scratch);
+                });
+            }
         }
         None
     }
@@ -761,8 +796,19 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                 let obstruction = self
                     .layout
                     .track_obstruction(self.net, layer, segment, self.width);
+                let overlapped = match (&obstruction, negotiation.present) {
+                    (Obstruction::Routed(_), Some(Present::PerCrossing { price, squeeze, .. }))
+                        if squeeze < price =>
+                    {
+                        Some(
+                            self.layout
+                                .track_overlaps(self.net, layer, segment, self.width),
+                        )
+                    }
+                    _ => None,
+                };
                 Some(
-                    self.rip_up_price(negotiation, obstruction)?
+                    self.rip_up_price(negotiation, obstruction, overlapped.as_deref())?
                         + negotiation.history.of_track(layer, segment),
                 )
             }
@@ -770,6 +816,12 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     }
 
     fn via_extra(&self, via: &Via) -> Option<i64> {
+        if let Some(diameter) = self.pair_vias {
+            let at = Segment::new(via.position, via.position);
+            return (self.design.via_kind(via.kind).copper.iter())
+                .all(|c| self.layout.is_track_clear(self.net, c.layer, at, diameter))
+                .then_some(0);
+        }
         if self.ignores_routed_copper {
             return (self.layout.via_obstruction(via) != Obstruction::Fixed).then_some(0);
         }
@@ -783,7 +835,7 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
                     .iter()
                     .map(|c| c.layer);
                 Some(
-                    self.rip_up_price(negotiation, self.layout.via_obstruction(via))?
+                    self.rip_up_price(negotiation, self.layout.via_obstruction(via), None)?
                         + negotiation.history.of_via(via, layers),
                 )
             }
@@ -793,17 +845,54 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
     /// Each crossed connection costs more the more often it was ripped up before,
     /// so that connections settle instead of taking turns (negotiated congestion's
     /// history cost); one ripped up too often may not be crossed again.
-    fn rip_up_price(&self, negotiation: Negotiation, obstruction: Obstruction) -> Option<i64> {
+    /// Where `overlapped` names the connections the step runs over, the
+    /// others it only comes too close to are squeezed past (`Present`); where
+    /// it is `None`, all are crossed.
+    fn rip_up_price(
+        &self,
+        negotiation: Negotiation,
+        obstruction: Obstruction,
+        overlapped: Option<&[ConnectionId]>,
+    ) -> Option<i64> {
         match obstruction {
             Obstruction::None => Some(0),
             Obstruction::Fixed => None,
             Obstruction::Routed(connections) if negotiation.present.is_some() => {
                 Some(match negotiation.present? {
                     Present::PerEdge(price) => price * connections.len() as i64,
-                    Present::PerCrossing { price, nets } => connections
-                        .iter()
-                        .map(|c| price * self.profile_pitch() / self.crossing_span(nets[c.index()]))
-                        .sum(),
+                    Present::PerCrossing {
+                        price,
+                        squeeze,
+                        nets,
+                        held,
+                    } => {
+                        if connections.iter().any(|c| held[c.index()]) {
+                            return None;
+                        }
+                        connections
+                            .iter()
+                            .map(|c| {
+                                let theirs = nets[c.index()];
+                                let pitch = self.profile_pitch();
+                                match overlapped {
+                                    // Crossing and squeezing priced alike: the
+                                    // whole band within the clearance pays.
+                                    None => price * pitch / self.crossing_span(theirs),
+                                    // Only the edges running over their copper
+                                    // cross; those beside it squeeze past.
+                                    Some(o) if o.contains(c) => {
+                                        price * pitch / self.overlap_span(theirs)
+                                    }
+                                    Some(_) => {
+                                        squeeze * pitch
+                                            / (self.crossing_span(theirs)
+                                                - self.overlap_span(theirs))
+                                            .max(pitch)
+                                    }
+                                }
+                            })
+                            .sum()
+                    }
                 })
             }
             Obstruction::Routed(connections) => {
@@ -828,6 +917,13 @@ impl<'a, L: LayoutAccess> Search<'a, L> {
             + i64::from(self.rules.track_width(theirs))
             + 2 * i64::from(self.rules.clearance(Some(self.net), Some(theirs)));
         span.max(self.profile_pitch())
+    }
+
+    /// How far a track of this connection runs over one of `theirs` it
+    /// crosses at right angles: both widths, a grid edge at least.
+    fn overlap_span(&self, theirs: NetId) -> i64 {
+        (i64::from(self.width) + i64::from(self.rules.track_width(theirs)))
+            .max(self.profile_pitch())
     }
 
     fn profile_pitch(&self) -> i64 {
@@ -1403,6 +1499,111 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(scratch.expanded.len(), distinct.len());
+    }
+
+    #[test]
+    fn a_way_that_moves_what_it_passes_aside_squeezes_past_rather_than_crossing() {
+        // B's track stands across A's straight way, crossing it dearer than
+        // going round its end. Squeezing past for nothing, A passes the end
+        // closer than the clearance, which B may then make way for, but runs
+        // over none of it; squeezing priced as crossing, it keeps clear.
+        let design = DesignBuilder::new(20.0, 10.0)
+            .layers(1)
+            .without_vias()
+            .smd("A1", Some("A"), at(5.0, 5.0), 0.4, 0)
+            .smd("A2", Some("A"), at(15.0, 5.0), 0.4, 0)
+            .smd("B1", Some("B"), at(1.0, 1.0), 0.4, 0)
+            .smd("B2", Some("B"), at(1.0, 9.0), 0.4, 0)
+            .build();
+        let rules = traxide_rules::compile(
+            &design,
+            Purpose::Routing {
+                grid_pitch: 100_000,
+            },
+        );
+        let mut layout = traxide_layout_access::Layout::build(&design, &rules);
+        let (a, b) = (design.net_named("A"), design.net_named("B"));
+        let width = rules.track_width(b);
+        layout.add_route(
+            ConnectionId::from_index(0),
+            &Routes {
+                tracks: vec![traxide_contracts::Track {
+                    net: b,
+                    layer: LayerId(0),
+                    width,
+                    path: vec![at(10.0, 3.0), at(10.0, 7.0)],
+                }],
+                vias: Vec::new(),
+            },
+        );
+        let profile = Profile {
+            name: "test".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 10,
+            history_cost: 0,
+            heuristic_weight: 1.0,
+            global_routing: false,
+            batch_size: 1,
+            against_layer_direction: 0.0,
+            rounds: 1,
+        };
+        let connection = Connection {
+            net: a,
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let (rip_ups, history) = ([0], History::new(&design, 0));
+        let (nets, held) = ([b], [false]);
+        let way = |squeeze: i64| {
+            let negotiation = Negotiation {
+                rip_ups: &rip_ups,
+                history: &history,
+                present: Some(Present::PerCrossing {
+                    price: 2 * profile.via_cost,
+                    squeeze,
+                    nets: &nets,
+                    held: &held,
+                }),
+            };
+            let search = Search::new(
+                &design,
+                &rules,
+                &profile,
+                connection,
+                &layout,
+                Some(negotiation),
+                None,
+            );
+            let steps = search.run(&mut Scratch::default()).expect("a way");
+            path::to_routes(&steps, a, width)
+        };
+        let segments = |routes: &Routes| -> Vec<Segment> {
+            (routes.tracks.iter())
+                .flat_map(|t| t.path.windows(2).map(|w| Segment::new(w[0], w[1])))
+                .collect()
+        };
+        let squeezed = way(0);
+        assert!(
+            segments(&squeezed)
+                .iter()
+                .all(|&s| layout.track_overlaps(a, LayerId(0), s, width).is_empty())
+        );
+        assert!(
+            segments(&squeezed)
+                .iter()
+                .any(|&s| layout.track_obstruction(a, LayerId(0), s, width) != Obstruction::None)
+        );
+        let kept_clear = way(2 * profile.via_cost);
+        assert!(segments(&kept_clear).iter().all(|&s| layout.is_track_clear(
+            a,
+            LayerId(0),
+            s,
+            width
+        )));
     }
 
     #[test]

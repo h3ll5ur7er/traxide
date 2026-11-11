@@ -193,6 +193,17 @@ pub struct NetClass {
     pub clearance: i32,
     /// In order of preference.
     pub via_kinds: Vec<ViaKindId>,
+    /// How the class routes differential pairs, where the board says so: two
+    /// of its nets named alike but for a closing `+` and `-`, or `P` and `N`,
+    /// run side by side (the Rules Engine pairs them).
+    pub pair: Option<PairGeometry>,
+}
+
+/// The tracks of a differential pair: each `width` wide, `gap` apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairGeometry {
+    pub width: i32,
+    pub gap: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

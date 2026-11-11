@@ -24,6 +24,18 @@ pub trait LayoutAccess {
         width: i32,
     ) -> Obstruction;
 
+    /// The routed connections of other nets whose copper a track segment of
+    /// `net` on `layer` would run over, as a track crossing them does; not
+    /// those it would only come closer to than the clearance, which could
+    /// move aside. Sorted, without duplicates.
+    fn track_overlaps(
+        &self,
+        net: NetId,
+        layer: LayerId,
+        segment: Segment,
+        width: i32,
+    ) -> Vec<ConnectionId>;
+
     /// What keeps `via` from fitting on the layers it spans.
     fn via_obstruction(&self, via: &Via) -> Obstruction;
 

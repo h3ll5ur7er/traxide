@@ -17,16 +17,16 @@ mod routes;
 pub mod testing;
 mod verdict;
 
-pub use constraints::{ConstraintSet, ViaLimits};
+pub use constraints::{ConstraintSet, DifferentialPair, ViaLimits};
 pub use corridors::Corridors;
 pub use design::{
     Condition, Constraint, CustomRule, Design, DesignRules, Item, Keepout, KeepoutScope, Layer,
-    LayerShape, Limits, Net, NetClass, Pad, Plane, ViaKind,
+    LayerShape, Limits, Net, NetClass, Pad, PairGeometry, Plane, ViaKind,
 };
 pub use events::{Event, Stage};
 pub use ids::{ConnectionId, LayerId, NetClassId, NetId, PadId, ViaKindId};
 pub use layout::{LayoutAccess, Obstruction};
-pub use plan::{Connection, Plan};
+pub use plan::{Connection, CoupledConnections, Plan};
 pub use profile::Profile;
 pub use routes::{Routes, RoutingResult, Track, Via};
 pub use traxide_geometry as geometry;

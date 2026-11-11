@@ -17,6 +17,38 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Long searches narrowed to a coarser way's corridor, with a time limit (M2, TRX-48)
+
+LogicBoard's long searches, of connections 100 to 165 mm long, flooded their windows: up to 4.5 million states popped from a window of 3.2 million, as negotiation's prices made the ways 1.4 to 2 times dearer than the straight distance its estimate counts. Given a time limit, a search whose window holds a quarter of a million grid nodes or more on each layer now first searches a grid five times coarser, 0.5 mm, at the same prices, and keeps the fine search to 2 mm either side of the way it finds; where that finds nothing, it searches the whole window. On the 20 boards CI leaves incomplete and TokenBoard, each within 90 s, against the same build without it:
+
+| | Without | **Narrowed** |
+| --- | --- | --- |
+| Nets complete | 2,608 | **2,612** |
+| Vias | 8,318 | 8,300 |
+| Track | 133,830 mm | 132,993 mm |
+
+LogicBoard 343 of 343 nets instead of 330, TokenBoard 223 new vias instead of 238; bm01 89 and Issue208 238 instead of 93 and 242 in that run, 90 and 238 against 89 and 238 when routed again, so within the noise at the limit. With the default profile, LogicBoard within 60 s completes 337 nets instead of 317.
+
+Not without a limit: with `--profile fast` and no limit, on 29 boards, it routed as many nets 4 % faster (TokenBoard in 144 s instead of 165 s) but with 2,640 vias instead of 2,590 (Issue015 81 instead of 56, Issue022 112 instead of 95): the corridor holds a connection to a dearer way. Twice as wide a corridor, 4 mm, lay in between (Issue015 59, LogicBoard 327 within 60 s); narrowing only windows of a million nodes or more left LogicBoard as it was. So routing narrows only against a time limit, where time is what is short.
+
+## Measured and not built: a heavier search heuristic (November 2026)
+
+LogicBoard (Issue219) completes 342 of 343 nets in one CI run and 306 in the next: it routes against CI's 90 s limit, and on this machine 306 nets within 45 s, 317 within 60 s, 330 within 90 s. With `--profile fast` it fares the same, 317 and 332, so routing three ways side by side is not what costs it. Its time goes to a few long searches: of 65 s of searching within 60 s, 20 searches of connections 120 to 165 mm long took 33 s, the slowest 4.6 s, while the other threads waited for them; batches held 3.6 connections on average. Corridors from global routing ([[TRX-26]]) left 298 nets complete within 60 s. A heuristic weight of 1.5 instead of 1.2 completed it, 343 of 343 within 60 s, but on the 20 boards CI leaves incomplete and TokenBoard, each within 90 s, it completed 2,586 nets instead of 2,608: LogicBoard 343 instead of 330 and smoothieboard 245 instead of 237, but Board-Unrouted 180 instead of 195, Protein 158 instead of 167, VGA 100 instead of 108; TokenBoard 5 vias more. Not built.
+
+## Differential pairs routed side by side (M5, TRX-38)
+
+TokenBoard's USB pair, USB_D_P and USB_D_N in the USB class (0.2 mm tracks, 0.25 mm apart), ran nowhere near each other: routed within 90 s, no stretch of either lay within 0.45 ± 0.05 mm of the other on its layer. The board's author coupled about a third: of USB_D_P's 155 mm, 38 mm within 0.4 to 0.7 mm of USB_D_N. Each pair's connections that start beside each other and end beside each other are now routed first, as one centre line 0.65 mm wide split into the two tracks, with two vias side by side where it changes layers; they stay as the board's own wiring. Where the pads at one end leave no room to fan in, as among the MCU's fan-out at R6 and R7, the tracks stop at the launch point in front of them and the router joins each pad there. This machine, `--time-limit 90`:
+
+| TokenBoard | Before | **Coupled** |
+| --- | --- | --- |
+| USB_D_P within 0.45 ± 0.05 mm of USB_D_N | 0 mm | **72 mm of 91 (79 %)** |
+| USB_D_N within 0.45 ± 0.05 mm of USB_D_P | 0 mm | **71 mm of 90 (79 %)** |
+| Vias | 241 | **238** |
+| Track | 12,538 mm | 12,607 mm |
+| Nets complete, rules broken | 241 of 241, none | 241 of 241, none |
+
+Coupled: U3 to J2 (31 mm) and J2 to R6 and R7 (100 mm), the latter through two pairs of vias. Not coupled: J1's two rows (A6 to B6, A7 to B7) and U3's pins on its two sides, connections between pins of one part.
+
 ## Hops taken out by moving what they pass (M5, TRX-76)
 
 Routed by Freerouting, TokenBoard has 199 new vias; routed by traxide, 446, with the same length of track. 250 of traxide's are in pairs that hop under 6 mm of the other layer to pass another track (Freerouting: 44). After tidying, each connection with more vias than it needs is searched again with vias four times dearer, allowed to cross routed connections at a quarter of a via per grid edge it overlaps them; what it crosses routes again among the rest, crossing nothing, and the change stays only if all of them route and their vias together fall. A second pass tries only connections near what moved. This machine, `--time-limit 90`, every board as complete as before and no rule broken that main does not break:
@@ -57,6 +89,19 @@ TokenBoard's new copper: 2,900 track segments instead of 3,128 (with the board's
 Tidying, taking out hops and growing trees searched with vias 4 times as dear as negotiation and a heuristic weight of 2 ([[TRX-72]]). Since what a hop's way crosses finds room further off, dearer pays. With `--profile fast`, TokenBoard and ten corpus boards together: 1,293 vias at 4 times and a weight of 2, 1,221 at 6, 1,201 at 8, 1,162 at 10; with a weight of 1.5, 1,240 at 4, 1,177 at 6, 1,144 at 8, **1,090** at 10, 1,120 at 12. At 10 times and 1.5, in 40 % more time: TokenBoard 259 instead of 318, Sofle 347 instead of 390, Issue022 53 instead of 78, Issue034 82 instead of 94, keyboard-tkl 61 instead of 65. With the default profile, TokenBoard without a limit routes with **229** vias instead of 253 (Freerouting: 199), but with more track: 12,977 mm with the board's own instead of 12,483 (Freerouting's board 12,381), in fewer segments, 2,716 instead of 2,788.
 
 Measured again on top, and not built: crossing at a sixteenth of a via per edge instead of an eighth, 1,076 vias instead of 1,090 in 53 % more time, but TokenBoard 276 instead of 259; a quarter, 1,322; what a hop's way crosses searching ten times as far for room instead of six, 1,095. Growing trees once more at the end, two-pad nets too, with a heuristic weight of 1 so routes pull tight: 1,084 vias, 0.7 % less track, but 1.3 % more corners and 17 % more time.
+
+## Shoving what is in the way (M5, TRX-37)
+
+After taking out hops, each connection negotiation left unrouted searches once more crossing routed connections, and what its way crosses routes again around it, two connections deep; it routes if all of them do. Given a time limit, negotiation stops at four fifths of it, tidying and taking out hops at nine tenths, and shoving has the rest. The 20 corpus boards CI left incomplete, each within 90 s, nets complete:
+
+| Routing | Nets complete |
+| --- | --- |
+| without shoving | 2,399 |
+| shoving before tidying, negotiation four fifths | 2,457 |
+| shoving after taking out hops, no time kept for it | 2,392 |
+| **shoving after taking out hops, the last tenth kept** | **2,470** |
+
+LogicBoard 342 of 343 instead of 331, Issue103 199 instead of 189, Issue066 239 instead of 226, smoothieboard 240 instead of 231, VGA 109 instead of 105, Protein 167 instead of 159, bm01 91 instead of 87; Issue208 238 instead of 244. No rule broken that the board does not break. Shoving before taking out hops cost vias: with `--profile fast` and no limit, bm01 kept 254 instead of 176, as what it squeezed in left the hop pass less room; after it, 191 vias, with 89 nets complete instead of 87. bm05's four connections stay unrouted: their ways cross what is in them, which then finds no way round out of U27's fine-pitch pads.
 
 ## A crossing priced as a whole (M5, TRX-92)
 

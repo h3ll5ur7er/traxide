@@ -2,7 +2,7 @@
 id: TRX-87
 title: Cheaper crossings and a third pass for taking out hops
 type: improvement
-status: review
+status: done
 assignee: claude
 priority: high
 labels: [detailed-routing]

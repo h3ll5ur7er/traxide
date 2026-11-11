@@ -502,3 +502,61 @@ fn protected_wiring_stays_even_when_asked_to_route_the_rest_again() {
         report.unrouted
     );
 }
+
+#[test]
+fn a_differential_pair_runs_side_by_side_and_the_rest_routes_around_it() {
+    let folder = tempfile::tempdir().expect("temp dir");
+    for file in ["pair.kicad_pcb", "pair.kicad_pro"] {
+        std::fs::copy(fixture(file), folder.path().join(file)).expect("copied");
+    }
+    let job = RouteJob {
+        input: folder.path().join("pair.kicad_pcb"),
+        output: None,
+        ..job("pair.kicad_pcb", folder.path())
+    };
+    let report = route(&job, &Silent, &CancelToken::new()).expect("routable");
+    assert!(
+        report.unrouted.is_empty() && report.verdict.is_clean(),
+        "{report:?}"
+    );
+    let routed = traxide_board_access::load_design(&report.output).expect("stored");
+    let tracks_of = |name: &str| -> Vec<traxide_contracts::Track> {
+        let net = routed.net_named(name);
+        let tracks = routed.existing.tracks.iter().filter(|t| t.net == net);
+        tracks.cloned().collect()
+    };
+    let (positive, negative) = (tracks_of("USB_D_P"), tracks_of("USB_D_N"));
+    let distance_to_negative = |at: traxide_contracts::geometry::Point| {
+        negative
+            .iter()
+            .flat_map(|t| t.path.windows(2))
+            .map(|w| {
+                let segment = traxide_contracts::geometry::Segment::new(w[0], w[1]);
+                at.distance(segment.closest_point(at))
+            })
+            .min()
+            .expect("tracks of the negative net")
+    };
+    let along = positive
+        .iter()
+        .flat_map(|t| t.path.windows(2))
+        .flat_map(|w| {
+            (0..=10).map(move |k| {
+                traxide_contracts::geometry::Point::new(
+                    w[0].x + (w[1].x - w[0].x) * k / 10,
+                    w[0].y + (w[1].y - w[0].y) * k / 10,
+                )
+            })
+        });
+    let middle: Vec<_> = along
+        .filter(|at| (7_000_000..=23_000_000).contains(&at.x))
+        .collect();
+    assert!(!middle.is_empty(), "{positive:?}");
+    for at in middle {
+        let apart = distance_to_negative(at);
+        assert!(
+            (449_000..=452_000).contains(&apart),
+            "{apart} apart at {at:?}"
+        );
+    }
+}

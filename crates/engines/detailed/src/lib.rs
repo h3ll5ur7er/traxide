@@ -10,9 +10,11 @@
 mod grid;
 mod history;
 mod lanes;
+mod pairs;
 mod path;
 mod search;
 
+pub use pairs::route_pairs;
 use search::NoRoute;
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -24,6 +26,20 @@ use traxide_contracts::{
     Obstruction, PadId, Plan, Profile, Routes, RoutingResult,
 };
 use traxide_events::{CancelToken, Publisher, Silent};
+
+/// How many times coarser than the profile's grid a narrowing search runs
+/// (`Finder::narrowed`): 0.5 mm on the default 0.1 mm grid, which LogicBoard
+/// completed within 60 s, 341 of 343 nets instead of 309 (TRX-48).
+const COARSENING: i32 = 5;
+
+/// How many cells of the coarser grid either side of its way a narrowed search
+/// may run in: 2 mm on the default grid. Twice as many, 4 mm, completed
+/// LogicBoard less within 60 s, 327 nets.
+const CORRIDOR_REACH: i32 = 4;
+
+/// The fewest grid nodes of a search's window worth narrowing, on each layer:
+/// a quarter of a million. From a million, LogicBoard gained nothing.
+const NARROWED_WINDOW_NODES: i64 = 250_000;
 
 /// How many connections a batch looks through for each connection it may hold.
 const SCANNED_PER_BATCH_SLOT: usize = 4;
@@ -100,6 +116,27 @@ const CROSSED_ROOM: i32 = 6;
 /// 979, in 8 % more; a fifth takes out none on TokenBoard (TRX-87).
 const MOST_HOP_PASSES: usize = 4;
 
+/// How deep a shove pushes: what moves aside for a connection that
+/// negotiation left unrouted may push what is in its way in turn, and so on,
+/// this many connections deep (TRX-37).
+const SHOVE_DEPTH: usize = 2;
+
+/// Shoving, crossing a routed connection costs this many eighths of a via,
+/// and squeezing past one, coming closer than the clearance without running
+/// over its copper, nothing: what is crossed has to find a way round the new
+/// copper, what is squeezed past only moves beside its old way. On bm05,
+/// squeezing for nothing routed U23-2 to U27-6 in U27's fine-pitch pads; on
+/// the 20 corpus boards CI left incomplete, each within 90 s, 2,473 nets
+/// complete instead of 2,470 (TRX-37).
+const SHOVE_CROSSING_EIGHTHS_OF_A_VIA: i64 = 8;
+
+/// Of the time routing is given, negotiation takes this many fifths, and
+/// leaves the rest to tidying and to shoving what is in the way of what it
+/// left unrouted, half each: on a board that reaches its limit, negotiation
+/// would otherwise take it all. Shoving comes after taking out hops, which
+/// what it squeezes in would leave less room (TRX-37).
+const NEGOTIATING_FIFTHS: u32 = 4;
+
 /// Past its deadline, routing searches for what is still queued for this
 /// share of the time it was given more, a second at least, and leaves the
 /// rest unrouted: LogicBoard's searches without rip-up took up to 43 s past a
@@ -116,6 +153,12 @@ pub struct Router<'a> {
     deadline: Option<Instant>,
     /// When it stops searching (SEARCHING_PAST_THE_DEADLINE).
     searching_ends: Option<Instant>,
+    /// When negotiation stops ripping up, leaving the rest of the time to
+    /// what comes after it (NEGOTIATING_FIFTHS).
+    negotiation_ends: Option<Instant>,
+    /// When tidying and taking out hops stop, leaving the rest of the time to
+    /// shoving.
+    tidying_ends: Option<Instant>,
     /// Whether the board's own copper cuts each connection asked about off,
     /// which no routing changes: a search for one cut off floods all it can
     /// reach, again on every attempt.
@@ -139,26 +182,46 @@ impl<'a> Router<'a> {
                 rules,
                 profile,
                 directions: search::Directions::default(),
+                narrows: false,
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
             searching_ends: None,
+            negotiation_ends: None,
+            tidying_ends: None,
             cut_off: HashMap::new(),
         }
     }
 
     /// Searches the connections of a batch on up to `threads` threads. The
     /// routes are the same on any number of them.
-    /// Stops negotiation at `deadline`: what is still queued then routes once
-    /// more without crossing anything, each in its own window only, so routing
-    /// ends a little later: a tenth of the time given at most, or a second
-    /// (SEARCHING_PAST_THE_DEADLINE).
+    /// Stops negotiation at four fifths of the time to `deadline`
+    /// (NEGOTIATING_FIFTHS): what is still queued then routes once more
+    /// without crossing anything, each in its own window only, and what is
+    /// left unrouted is shoved for, and the routes tidied, until `deadline`.
+    /// Searching for what is queued ends a little later at most: a tenth of
+    /// the time given, or a second (SEARCHING_PAST_THE_DEADLINE).
+    /// With time short, a search of a large window keeps to the corridor of
+    /// the way a coarser grid finds first (`Finder::narrowed`).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
-        let given = deadline.saturating_duration_since(Instant::now());
+        self.finder.narrows = true;
+        let now = Instant::now();
+        let given = deadline.saturating_duration_since(now);
         let past = (given / SEARCHING_PAST_THE_DEADLINE).max(LEAST_SEARCHING_PAST_THE_DEADLINE);
         self.deadline = Some(deadline);
         self.searching_ends = Some(deadline + past);
+        self.negotiation_ends = Some(negotiation_ends(now, deadline));
+        self.tidying_ends = Some(tidying_ends(now, deadline));
         self
+    }
+
+    fn is_past_tidying(&self) -> bool {
+        self.tidying_ends.is_some_and(|ends| Instant::now() >= ends)
+    }
+
+    fn is_past_negotiation(&self) -> bool {
+        self.negotiation_ends
+            .is_some_and(|ends| Instant::now() >= ends)
     }
 
     fn is_past_deadline(&self) -> bool {
@@ -225,7 +288,7 @@ impl<'a> Router<'a> {
         let mut best = self.route_side_by_side(&all_ways, plan, corridors, layout, cancel, events);
         let later = LATER_ROUNDS.iter().take(rounds - 1);
         for (round, &(dearer_vias, layers, as_is)) in (2..).zip(later) {
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_negotiation() {
                 break;
             }
             events.publish(Event::RoundStarted { round, of });
@@ -347,10 +410,13 @@ impl<'a> Router<'a> {
                 rules: self.finder.rules,
                 profile,
                 directions,
+                narrows: self.finder.narrows,
             },
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
             searching_ends: self.searching_ends,
+            negotiation_ends: self.negotiation_ends,
+            tidying_ends: self.tidying_ends,
             cut_off: self.cut_off.clone(),
         }
     }
@@ -370,7 +436,7 @@ impl<'a> Router<'a> {
         let mut best = if first.unrouted.is_empty()
             || self.finder.profile.max_rip_ups == 0
             || cancel.is_cancelled()
-            || self.is_past_deadline()
+            || self.is_past_negotiation()
         {
             first
         } else {
@@ -395,6 +461,9 @@ impl<'a> Router<'a> {
                     break;
                 }
                 changed = Some(moved);
+            }
+            if !best.unrouted.is_empty() {
+                self.shove_aside_for_unrouted(&mut best, plan, layout, cancel);
             }
             self.continue_lanes(&mut best, plan, layout, cancel);
             self.grow_trees(&mut best, plan, layout, cancel);
@@ -433,10 +502,11 @@ impl<'a> Router<'a> {
         };
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         for (i, routed) in attempt.routed.iter_mut().enumerate() {
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_tidying() {
                 return;
             }
             let connection = plan.connections[i];
@@ -457,13 +527,111 @@ impl<'a> Router<'a> {
         }
     }
 
+    /// Routes each connection that negotiation left unrouted once more,
+    /// crossing routed connections at a price for each crossing, and moves
+    /// what its way crosses aside (`move_aside`): it routes then if all of
+    /// them still route. Negotiation rips up what is in a connection's way
+    /// and leaves it unrouted until it routes again, and gives up after so
+    /// many rip-ups; this moves nothing unless it routes elsewhere (TRX-37).
+    fn shove_aside_for_unrouted(
+        &mut self,
+        attempt: &mut Attempt,
+        plan: &Plan,
+        layout: &mut (impl LayoutAccess + Sync),
+        cancel: &CancelToken,
+    ) {
+        let (dearer, roomier) = self.moving_profiles();
+        let finder = Finder {
+            profile: &dearer,
+            narrows: false,
+            ..self.finder
+        };
+        let room_finder = Finder {
+            profile: &roomier,
+            narrows: false,
+            ..self.finder
+        };
+        let no_history = history::History::new(self.finder.design, 0);
+        let no_rip_ups = vec![0; attempt.routed.len()];
+        let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
+        let nothing_held = vec![false; attempt.routed.len()];
+        let crossing = crossing_moved_aside(
+            &dearer,
+            &no_rip_ups,
+            &no_history,
+            &nets,
+            &nothing_held,
+            true,
+        );
+        let mover = Mover {
+            room_finder: &room_finder,
+            plan,
+            profile: &dearer,
+            no_rip_ups: &no_rip_ups,
+            no_history: &no_history,
+            nets: &nets,
+            squeezing: true,
+        };
+        let deadline = self.deadline;
+        let scratch = &mut self.scratches[0];
+        let mut still_unrouted = Vec::new();
+        for id in std::mem::take(&mut attempt.unrouted) {
+            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+                still_unrouted.push(id);
+                continue;
+            }
+            let connection = plan.connections[id.index()];
+            let Ok(found) = finder.search(scratch, connection, layout, Some(crossing), None) else {
+                still_unrouted.push(id);
+                continue;
+            };
+            let (mut held, mut touched) = (nothing_held.clone(), Vec::new());
+            let moved = mover.move_aside(
+                scratch,
+                layout,
+                id,
+                &found,
+                SHOVE_DEPTH,
+                &mut held,
+                &mut touched,
+            );
+            let Some(moved) = moved else {
+                undo(layout, &attempt.routed, &touched);
+                still_unrouted.push(id);
+                continue;
+            };
+            for (other, route) in moved {
+                attempt.routed[other.index()] = Some(route);
+            }
+            attempt.routed[id.index()] = Some(found);
+        }
+        attempt.unrouted = still_unrouted;
+    }
+
+    /// The profiles of the stages that move routed copper: vias
+    /// TIDYING_VIA_COST times dearer, and as such, searching CROSSED_ROOM
+    /// times as far beyond the pads, for what moves aside.
+    fn moving_profiles(&self) -> (Profile, Profile) {
+        let dearer = Profile {
+            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
+            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
+            ..self.finder.profile.clone()
+        };
+        let roomier = Profile {
+            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
+            ..dearer.clone()
+        };
+        (dearer, roomier)
+    }
+
     /// Takes out the vias of each routed connection that changes layers more
     /// often than it must, where moving the copper it passes makes room.
     /// Tidying searched it among the rest crossing nothing; now it may cross
-    /// routed connections at a price for each grid edge it overlaps them, with vias as dear as
-    /// tidying makes them, and takes the way found if it has fewer vias. What
-    /// it crosses routes again among the rest, crossing nothing. The change
-    /// stays only if all of them route and their vias together fall: a hop
+    /// routed connections at a price for each crossing
+    /// (CROSSING_EIGHTHS_OF_A_VIA), with vias as dear as tidying makes them,
+    /// and takes the way found if it has fewer vias. What it crosses moves
+    /// aside (`move_aside`). The change stays only if all of them route and
+    /// their vias together fall: a hop
     /// under a track that could run elsewhere goes, a hop under a track that
     /// must stay where it is stays. Where `near` is given, only connections
     /// whose window meets one of its areas are tried: elsewhere nothing
@@ -477,46 +645,50 @@ impl<'a> Router<'a> {
         near: Option<&[Rect]>,
         cancel: &CancelToken,
     ) -> Vec<Rect> {
-        let dearer = Profile {
-            via_cost: self.finder.profile.via_cost * TIDYING_VIA_COST,
-            heuristic_weight: TIDYING_HEURISTIC_WEIGHT,
-            ..self.finder.profile.clone()
-        };
+        let (dearer, roomier) = self.moving_profiles();
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
-        };
-        let roomier = Profile {
-            detour_margin: dearer.detour_margin.saturating_mul(CROSSED_ROOM),
-            ..dearer.clone()
         };
         let room_finder = Finder {
             profile: &roomier,
+            narrows: false,
             ..self.finder
         };
         let no_history = history::History::new(self.finder.design, 0);
         let no_rip_ups = vec![0; attempt.routed.len()];
         let nets: Vec<NetId> = plan.connections.iter().map(|c| c.net).collect();
-        let crossing = search::Negotiation {
-            rip_ups: &no_rip_ups,
-            history: &no_history,
-            present: Some(search::Present::PerCrossing {
-                price: dearer.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8,
-                nets: &nets,
-            }),
+        let nothing_held = vec![false; attempt.routed.len()];
+        let crossing = crossing_moved_aside(
+            &dearer,
+            &no_rip_ups,
+            &no_history,
+            &nets,
+            &nothing_held,
+            false,
+        );
+        let mover = Mover {
+            room_finder: &room_finder,
+            plan,
+            profile: &dearer,
+            no_rip_ups: &no_rip_ups,
+            no_history: &no_history,
+            nets: &nets,
+            squeezing: false,
         };
         let fewest_of: Vec<usize> = plan
             .connections
             .iter()
             .map(|&connection| self.fewest_vias(connection))
             .collect();
-        let deadline = self.deadline;
+        let tidying_ends = self.tidying_ends;
         let scratch = &mut self.scratches[0];
         let design = self.finder.design;
         let margin = self.finder.profile.detour_margin;
         let mut moved_areas = Vec::new();
         for (i, &fewest) in fewest_of.iter().enumerate() {
-            if cancel.is_cancelled() || deadline.is_some_and(|d| Instant::now() >= d) {
+            if cancel.is_cancelled() || tidying_ends.is_some_and(|ends| Instant::now() >= ends) {
                 return Vec::new();
             }
             let connection = plan.connections[i];
@@ -542,51 +714,37 @@ impl<'a> Router<'a> {
                 layout.add_route(id, &routes);
                 continue;
             };
-            let crossed = routed_obstructions(layout, &moved);
-            for &other in &crossed {
-                layout.remove_route(other);
-            }
-            layout.add_route(id, &moved);
-            let mut rerouted = Vec::new();
-            for &other in &crossed {
-                let connection = plan.connections[other.index()];
-                match room_finder.search(scratch, connection, layout, None, None) {
-                    Ok(route) => {
-                        layout.add_route(other, &route);
-                        rerouted.push(route);
-                    }
-                    Err(_) => break,
-                }
-            }
+            // One deep: what a hop passes under moves without pushing others.
+            let (mut held, mut touched) = (nothing_held.clone(), Vec::new());
+            let rerouted =
+                mover.move_aside(scratch, layout, id, &moved, 1, &mut held, &mut touched);
+            let Some(rerouted) = rerouted else {
+                undo(layout, &attempt.routed, &touched);
+                continue;
+            };
             let vias_of = |routed: &Option<Routes>| routed.as_ref().map_or(0, |r| r.vias.len());
             let before = routes.vias.len()
-                + crossed
-                    .iter()
-                    .map(|other| vias_of(&attempt.routed[other.index()]))
+                + (rerouted.iter())
+                    .map(|(other, _)| vias_of(&attempt.routed[other.index()]))
                     .sum::<usize>();
-            let after =
-                moved.vias.len() + rerouted.iter().map(|route| route.vias.len()).sum::<usize>();
-            if rerouted.len() == crossed.len() && after < before {
+            let after = moved.vias.len()
+                + rerouted
+                    .iter()
+                    .map(|(_, route)| route.vias.len())
+                    .sum::<usize>();
+            if after < before {
                 let old = std::iter::once(&routes).chain(
-                    crossed
-                        .iter()
-                        .filter_map(|other| attempt.routed[other.index()].as_ref()),
+                    (rerouted.iter())
+                        .filter_map(|(other, _)| attempt.routed[other.index()].as_ref()),
                 );
-                let new = std::iter::once(&moved).chain(&rerouted);
+                let new = std::iter::once(&moved).chain(rerouted.iter().map(|(_, route)| route));
                 moved_areas.extend(old.chain(new).filter_map(copper_bounds));
                 attempt.routed[i] = Some(moved);
-                for (other, route) in crossed.into_iter().zip(rerouted) {
+                for (other, route) in rerouted {
                     attempt.routed[other.index()] = Some(route);
                 }
             } else {
-                layout.remove_route(id);
-                layout.add_route(id, &routes);
-                for &other in &crossed {
-                    layout.remove_route(other);
-                    if let Some(theirs) = &attempt.routed[other.index()] {
-                        layout.add_route(other, theirs);
-                    }
-                }
+                undo(layout, &attempt.routed, &touched);
             }
         }
         moved_areas
@@ -618,6 +776,7 @@ impl<'a> Router<'a> {
         };
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         let deadline = self.deadline;
@@ -761,7 +920,7 @@ impl<'a> Router<'a> {
                 unrouted.extend(state.queue.drain(..));
                 break;
             }
-            if self.is_past_deadline() {
+            if self.is_past_negotiation() {
                 state.may_rip_up = false;
             }
             let batch = self.next_batch(&mut state.queue, plan, corridors);
@@ -787,8 +946,8 @@ impl<'a> Router<'a> {
             // the copper of a connection searched beside it.
             for id in no_way {
                 let connection = plan.connections[id.index()];
-                // Past the deadline no time is left for searches up to the whole board.
-                if self.is_past_deadline() {
+                // Past negotiation no time is left for searches up to the whole board.
+                if self.is_past_negotiation() {
                     unrouted.push(id);
                     continue;
                 }
@@ -841,7 +1000,7 @@ impl<'a> Router<'a> {
         let mut failed = Vec::new();
         let (mut fewest_overlapping, mut rounds_without_gain) = (usize::MAX, 0);
         loop {
-            while !state.queue.is_empty() && !cancel.is_cancelled() && !self.is_past_deadline() {
+            while !state.queue.is_empty() && !cancel.is_cancelled() && !self.is_past_negotiation() {
                 let batch = self.next_batch(&mut state.queue, plan, corridors);
                 let negotiation = search::Negotiation {
                     rip_ups: &no_rip_ups,
@@ -873,7 +1032,7 @@ impl<'a> Router<'a> {
                     }
                 }
             }
-            if cancel.is_cancelled() || self.is_past_deadline() {
+            if cancel.is_cancelled() || self.is_past_negotiation() {
                 break;
             }
             let overlapping: Vec<ConnectionId> = (0..total)
@@ -1110,6 +1269,9 @@ struct Finder<'a> {
     rules: &'a ConstraintSet,
     profile: &'a Profile,
     directions: search::Directions,
+    /// Whether a search of a large window first keeps to the corridor of the
+    /// way a coarser grid finds (`narrowed`).
+    narrows: bool,
 }
 
 impl Finder<'_> {
@@ -1161,10 +1323,116 @@ impl Finder<'_> {
             self.search(scratch, connection, layout, negotiation, Some((c, id)))
                 .ok()
         });
-        in_corridor.map_or_else(
-            || self.search(scratch, connection, layout, negotiation, None),
-            Ok,
+        if let Some(found) = in_corridor {
+            return Ok(found);
+        }
+        if corridors.is_none() && self.narrows {
+            let narrowed = self.narrowed(scratch, connection, layout, negotiation);
+            if let Some(corridor) = narrowed
+                && let Ok(found) = self.search(
+                    scratch,
+                    connection,
+                    layout,
+                    negotiation,
+                    Some((&corridor, ConnectionId(0))),
+                )
+            {
+                return Ok(found);
+            }
+        }
+        self.search(scratch, connection, layout, negotiation, None)
+    }
+
+    /// For a search of a window of NARROWED_WINDOW_NODES grid nodes or more,
+    /// the corridor CORRIDOR_REACH cells either side of the way a grid
+    /// COARSENING times coarser finds, at the same prices: a long search that
+    /// pays for crossing routed copper floods most of its window, as its
+    /// estimate knows nothing of those prices; on the coarser grid it floods a
+    /// small fraction of the states, and the fine search only the corridor
+    /// (TRX-48). The corridor, as the corridors of global routing, the way for
+    /// connection 0.
+    fn narrowed(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+        negotiation: Option<search::Negotiation>,
+    ) -> Option<Corridors> {
+        let pitch = self.profile.grid_pitch;
+        let window = search::window(self.design, self.profile.detour_margin, connection, None);
+        let across = |min: i32, max: i32| i64::from((max - min) / pitch + 1);
+        let nodes = across(window.min.x, window.max.x) * across(window.min.y, window.max.y);
+        if nodes < NARROWED_WINDOW_NODES {
+            return None;
+        }
+        // An edge of the coarser grid spans COARSENING of the finer, so it
+        // pays as much for what it crosses as they would together.
+        let coarser = Profile {
+            grid_pitch: pitch * COARSENING,
+            rip_up_cost: self.profile.rip_up_cost * i64::from(COARSENING),
+            ..self.profile.clone()
+        };
+        let negotiation = negotiation.map(|n| search::Negotiation {
+            present: n.present.map(|present| match present {
+                search::Present::PerEdge(price) => {
+                    search::Present::PerEdge(price * i64::from(COARSENING))
+                }
+                per_crossing => per_crossing,
+            }),
+            ..n
+        });
+        let steps = search::Search::new(
+            self.design,
+            self.rules,
+            &coarser,
+            connection,
+            layout,
+            negotiation,
+            None,
         )
+        .with_directions(self.directions)
+        .run(scratch)
+        .ok()?;
+        let cell = coarser.grid_pitch;
+        let origin = Point::new(
+            (window.min.x.div_euclid(cell) - 1) * cell,
+            (window.min.y.div_euclid(cell) - 1) * cell,
+        );
+        let columns = (window.max.x - origin.x) / cell + 2;
+        let rows = (window.max.y - origin.y) / cell + 2;
+        let mut cells = BTreeSet::new();
+        let mut around = |at: Point| {
+            let (column, row) = (
+                (at.x - origin.x).div_euclid(cell),
+                (at.y - origin.y).div_euclid(cell),
+            );
+            for r in (row - CORRIDOR_REACH).max(0)..=(row + CORRIDOR_REACH).min(rows - 1) {
+                for c in
+                    (column - CORRIDOR_REACH).max(0)..=(column + CORRIDOR_REACH).min(columns - 1)
+                {
+                    cells.insert((r * columns + c) as u32);
+                }
+            }
+        };
+        for (step, next) in steps.iter().zip(steps.iter().skip(1)) {
+            let (a, b) = (step.at, next.at);
+            let pieces = (a.distance(b) / i64::from(cell / 2)).max(1);
+            for k in 0..=pieces {
+                around(Point::new(
+                    a.x + (i64::from(b.x - a.x) * k / pieces) as i32,
+                    a.y + (i64::from(b.y - a.y) * k / pieces) as i32,
+                ));
+            }
+        }
+        if let Some(first) = steps.first() {
+            around(first.at);
+        }
+        Some(Corridors::new(
+            origin,
+            cell,
+            columns,
+            vec![cells.into_iter().collect()],
+        ))
     }
 
     fn search(
@@ -1241,6 +1509,142 @@ impl Finder<'_> {
             connection.net,
             self.rules.track_width(connection.net),
         )
+    }
+}
+
+/// When negotiation stops, given until `deadline` from `now`
+/// (NEGOTIATING_FIFTHS).
+fn negotiation_ends(now: Instant, deadline: Instant) -> Instant {
+    now + deadline.saturating_duration_since(now) * NEGOTIATING_FIFTHS / 5
+}
+
+/// When tidying stops, given until `deadline` from `now`: half way between
+/// negotiation's end and the deadline.
+fn tidying_ends(now: Instant, deadline: Instant) -> Instant {
+    let negotiated = negotiation_ends(now, deadline);
+    negotiated + deadline.saturating_duration_since(negotiated) / 2
+}
+
+/// Crossing routed connections at CROSSING_EIGHTHS_OF_A_VIA of a via of
+/// `profile` each, whatever their rip-ups and history, as what is crossed
+/// moves aside then; `squeezing`, crossing at SHOVE_CROSSING_EIGHTHS_OF_A_VIA
+/// and squeezing past for nothing.
+fn crossing_moved_aside<'a>(
+    profile: &Profile,
+    rip_ups: &'a [u32],
+    history: &'a history::History,
+    nets: &'a [NetId],
+    held: &'a [bool],
+    squeezing: bool,
+) -> search::Negotiation<'a> {
+    let (price, squeeze) = if squeezing {
+        (profile.via_cost * SHOVE_CROSSING_EIGHTHS_OF_A_VIA / 8, 0)
+    } else {
+        let price = profile.via_cost * CROSSING_EIGHTHS_OF_A_VIA / 8;
+        (price, price)
+    };
+    search::Negotiation {
+        rip_ups,
+        history,
+        present: Some(search::Present::PerCrossing {
+            price,
+            squeeze,
+            nets,
+            held,
+        }),
+    }
+}
+
+/// What moving routed connections aside searches with: `room_finder` for
+/// what is crossed, with vias as dear as for the move's own way and looking
+/// CROSSED_ROOM times as far; and what crossing costs (`crossing_moved_aside`).
+struct Mover<'f, 'a> {
+    room_finder: &'f Finder<'a>,
+    plan: &'f Plan,
+    profile: &'f Profile,
+    no_rip_ups: &'f [u32],
+    no_history: &'f history::History,
+    nets: &'f [NetId],
+    /// Whether what moves aside squeezes past what it only comes close to,
+    /// at a lower price than crossing it.
+    squeezing: bool,
+}
+
+impl Mover<'_, '_> {
+    /// Puts `found`, a way for connection `id` that may cross routed
+    /// connections, into `layout`, where `id` has no route, and routes each
+    /// connection it crosses once more around it: among the rest without
+    /// crossing them, or, while `depth` allows, crossing others, which move
+    /// aside so in turn. It never crosses what `held` holds, the connections
+    /// this move has placed already. Gives the connections moved with their
+    /// new routes, or `None` where one finds no way; `touched` names every
+    /// connection whose copper changed, for `undo`.
+    #[allow(clippy::too_many_arguments)]
+    fn move_aside(
+        &self,
+        scratch: &mut search::Scratch,
+        layout: &mut impl LayoutAccess,
+        id: ConnectionId,
+        found: &Routes,
+        depth: usize,
+        held: &mut [bool],
+        touched: &mut Vec<ConnectionId>,
+    ) -> Option<Vec<(ConnectionId, Routes)>> {
+        let crossed = routed_obstructions(layout, found);
+        for &other in &crossed {
+            layout.remove_route(other);
+            touched.push(other);
+        }
+        layout.add_route(id, found);
+        touched.push(id);
+        held[id.index()] = true;
+        let mut moved = Vec::new();
+        for &other in &crossed {
+            let connection = self.plan.connections[other.index()];
+            if let Ok(route) = self
+                .room_finder
+                .search(scratch, connection, layout, None, None)
+            {
+                layout.add_route(other, &route);
+                held[other.index()] = true;
+                moved.push((other, route));
+                continue;
+            }
+            if depth <= 1 {
+                return None;
+            }
+            let held_now = held.to_vec();
+            let crossing = crossing_moved_aside(
+                self.profile,
+                self.no_rip_ups,
+                self.no_history,
+                self.nets,
+                &held_now,
+                self.squeezing,
+            );
+            let route = self
+                .room_finder
+                .search(scratch, connection, layout, Some(crossing), None)
+                .ok()?;
+            let pushed =
+                self.move_aside(scratch, layout, other, &route, depth - 1, held, touched)?;
+            moved.push((other, route));
+            moved.extend(pushed);
+        }
+        Some(moved)
+    }
+}
+
+/// Takes back a move of routed connections: each connection in `touched`
+/// routes again as `routed` has it, or not at all.
+fn undo(layout: &mut impl LayoutAccess, routed: &[Option<Routes>], touched: &[ConnectionId]) {
+    for &connection in touched {
+        layout.remove_route(connection);
+    }
+    for &connection in touched {
+        if let Some(routes) = &routed[connection.index()] {
+            layout.add_route(connection, routes);
+        }
     }
 }
 
@@ -1892,5 +2296,148 @@ mod tests {
             holding_pads_left(&design, connection, &grown_from_p1, &sides, &[None]),
             Some(Vec::new())
         );
+    }
+
+    /// A board 120 by 40 mm with pads A1 at `from` and A2 at `to`, which
+    /// only a way past `walls` joins.
+    fn across_a_board(from: Point, to: Point, walls: &[Rect]) -> Design {
+        let mut builder = DesignBuilder::new(120.0, 40.0)
+            .smd("A1", Some("A"), from, 0.6, 0)
+            .smd("A2", Some("A"), to, 0.6, 0);
+        for &wall in walls {
+            let shape = traxide_contracts::geometry::Shape::Polygon(
+                traxide_contracts::geometry::Polygon::rectangle(wall),
+            );
+            builder = builder.keepout(shape, None, KeepoutScope::Everything);
+        }
+        builder.build()
+    }
+
+    /// Searches A1 to A2 once, narrowed or not, and counts the states expanded.
+    fn search_across(design: &Design, narrows: bool) -> (Result<Routes, NoRoute>, usize) {
+        // The default profile's.
+        let profile = Profile {
+            name: "default".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 20,
+            history_cost: 2_000_000,
+            heuristic_weight: 1.2,
+            global_routing: false,
+            batch_size: 16,
+            against_layer_direction: 0.0,
+            rounds: 1,
+        };
+        let rules = traxide_rules::compile(
+            design,
+            Purpose::Routing {
+                grid_pitch: profile.grid_pitch,
+            },
+        );
+        let layout = Layout::build(design, &rules);
+        let finder = Finder {
+            design,
+            rules: &rules,
+            profile: &profile,
+            directions: search::Directions::default(),
+            narrows,
+        };
+        let connection = Connection {
+            net: design.net_named("A"),
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let mut scratch = search::Scratch::default();
+        let found = finder.find(
+            &mut scratch,
+            ConnectionId(0),
+            connection,
+            None,
+            &layout,
+            None,
+        );
+        (found, scratch.expanded.len())
+    }
+
+    #[test]
+    fn a_long_search_narrowed_to_a_coarser_ways_corridor_expands_under_half_the_states() {
+        // A1 in a cup that opens away from A2: the search floods the cup and
+        // everything its estimate takes for cheaper than the way out.
+        let wall = |x0, y0, x1, y1| Rect {
+            min: at(x0, y0),
+            max: at(x1, y1),
+        };
+        let design = across_a_board(
+            at(10.0, 20.0),
+            at(115.0, 38.0),
+            &[
+                wall(20.0, 14.0, 21.0, 30.0),
+                wall(6.5, 29.0, 21.0, 30.0),
+                wall(6.5, 14.0, 21.0, 15.0),
+            ],
+        );
+        let (whole, everywhere) = search_across(&design, false);
+        let (narrowed, in_corridor) = search_across(&design, true);
+        assert!(whole.is_ok() && narrowed.is_ok());
+        assert!(
+            in_corridor * 2 < everywhere,
+            "{in_corridor} states narrowed, {everywhere} not"
+        );
+    }
+
+    #[test]
+    fn a_passage_too_narrow_for_the_coarser_grid_is_still_found() {
+        // A track's centre fits between the walls at y 15.3 mm only, which a
+        // grid of 0.5 mm never reaches.
+        let design = across_a_board(
+            at(5.0, 5.0),
+            at(115.0, 35.0),
+            &[
+                Rect {
+                    min: at(49.0, 0.0),
+                    max: at(51.0, 15.15),
+                },
+                Rect {
+                    min: at(49.0, 15.4),
+                    max: at(51.0, 40.0),
+                },
+            ],
+        );
+        let (found, _) = search_across(&design, true);
+        let routes = found.expect("a way through the passage");
+        let through = routes
+            .tracks
+            .iter()
+            .flat_map(|t| t.path.windows(2))
+            .any(|w| {
+                let (left, right) = (w[0].x.min(w[1].x), w[0].x.max(w[1].x));
+                w[0].y == at(0.0, 15.3).y
+                    && w[1].y == w[0].y
+                    && left <= at(49.0, 0.0).x
+                    && right >= at(51.0, 0.0).x
+            });
+        assert!(through, "{routes:?}");
+    }
+
+    #[test]
+    fn negotiation_leaves_a_fifth_of_the_time_given_to_shoving_and_tidying() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert_eq!(
+            negotiation_ends(now, deadline),
+            now + Duration::from_secs(8)
+        );
+        assert_eq!(negotiation_ends(deadline, now), deadline);
+    }
+
+    #[test]
+    fn tidying_leaves_the_last_tenth_of_the_time_given_to_shoving() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(10);
+        assert_eq!(tidying_ends(now, deadline), now + Duration::from_secs(9));
+        assert_eq!(tidying_ends(deadline, now), deadline);
     }
 }

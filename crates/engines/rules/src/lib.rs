@@ -5,7 +5,8 @@ mod custom;
 
 use custom::{Groups, Rules};
 use traxide_contracts::{
-    Constraint, ConstraintSet, Design, Limits, NetClassId, ViaKind, ViaKindId, ViaLimits,
+    Constraint, ConstraintSet, Design, DifferentialPair, Limits, Net, NetClassId, NetId, ViaKind,
+    ViaKindId, ViaLimits,
 };
 
 /// What the compiled rules are for.
@@ -151,6 +152,39 @@ pub fn compile(design: &Design, purpose: Purpose) -> ConstraintSet {
             })
             .collect(),
     )
+    .with_pairs(differential_pairs(design))
+}
+
+/// The nets of a class that routes differential pairs whose names differ only
+/// in a closing `+` and `-`, or `P` and `N`, as KiCad pairs them.
+fn differential_pairs(design: &Design) -> Vec<DifferentialPair> {
+    let geometry_of = |net: &Net| design.rules.classes[net.class.index()].pair;
+    let id_named = |name: &str| {
+        design
+            .nets
+            .iter()
+            .position(|net| net.name == name && geometry_of(net).is_some())
+            .map(NetId::from_index)
+    };
+    design
+        .nets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, net)| {
+            let geometry = geometry_of(net)?;
+            let negative_name = net
+                .name
+                .strip_suffix('+')
+                .map(|stem| format!("{stem}-"))
+                .or_else(|| net.name.strip_suffix('P').map(|stem| format!("{stem}N")))?;
+            Some(DifferentialPair {
+                positive: NetId::from_index(index),
+                negative: id_named(&negative_name)?,
+                width: geometry.width,
+                gap: geometry.gap,
+            })
+        })
+        .collect()
 }
 
 /// The limits `constraint` sets on the copper of `group`: the board's
@@ -191,9 +225,10 @@ fn diameter_of(kind: &ViaKind) -> i32 {
 mod tests {
     use super::*;
     use traxide_contracts::geometry::{Point, Polygon, Rect, Shape};
+    use traxide_contracts::testing::{DesignBuilder, at, mm};
     use traxide_contracts::{
-        Condition, Constraint, CustomRule, DesignRules, Item, Layer, LayerId, LayerShape, Limits,
-        Net, NetClass, NetClassId, NetId, Routes, ViaKind, ViaKindId,
+        Condition, Constraint, CustomRule, DesignRules, DifferentialPair, Item, Layer, LayerId,
+        LayerShape, Limits, Net, NetClass, NetClassId, NetId, Routes, ViaKind, ViaKindId,
     };
 
     fn class(name: &str, track_width: i32, clearance: i32, via: u32) -> NetClass {
@@ -202,6 +237,7 @@ mod tests {
             track_width,
             clearance,
             via_kinds: vec![ViaKindId(via)],
+            pair: None,
         }
     }
 
@@ -534,5 +570,38 @@ mod tests {
             (rules.largest_clearance(), rules.edge_clearance()),
             (300, 900)
         );
+    }
+
+    #[test]
+    fn nets_named_alike_but_for_a_closing_plus_and_minus_or_p_and_n_are_a_pair() {
+        let pads = ["USB_D_P", "USB_D_N", "CLK+", "CLK-", "LONE_P", "SDA"];
+        let mut builder = DesignBuilder::new(20.0, 10.0).differential_pairs(0.2, 0.25);
+        for (i, net) in pads.iter().enumerate() {
+            builder = builder.smd(&format!("P{i}"), Some(net), at(1.0 + i as f64, 1.0), 0.5, 0);
+        }
+        let design = builder.build();
+        let rules = compile(&design, Purpose::Verification);
+        let net = |name: &str| design.net_named(name);
+        let pair = |positive: &str, negative: &str| {
+            Some(DifferentialPair {
+                positive: net(positive),
+                negative: net(negative),
+                width: mm(0.2),
+                gap: mm(0.25),
+            })
+        };
+        assert_eq!(rules.pair_of(net("USB_D_P")), pair("USB_D_P", "USB_D_N"));
+        assert_eq!(rules.pair_of(net("USB_D_N")), pair("USB_D_P", "USB_D_N"));
+        assert_eq!(rules.pair_of(net("CLK-")), pair("CLK+", "CLK-"));
+        assert_eq!(rules.pair_of(net("LONE_P")), None);
+        assert_eq!(rules.pair_of(net("SDA")), None);
+        // A class that routes no pairs pairs nothing.
+        let mut plain = DesignBuilder::new(20.0, 10.0);
+        for (i, net) in pads.iter().enumerate() {
+            plain = plain.smd(&format!("P{i}"), Some(net), at(1.0 + i as f64, 1.0), 0.5, 0);
+        }
+        let plain = plain.build();
+        let rules = compile(&plain, Purpose::Verification);
+        assert_eq!(rules.pair_of(plain.net_named("USB_D_P")), None);
     }
 }

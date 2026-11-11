@@ -644,6 +644,78 @@ fn rips_up_a_connection_in_the_way_and_routes_it_again_elsewhere() {
 }
 
 #[test]
+fn without_rip_up_a_connection_shoves_one_in_its_only_way_to_another() {
+    // A wall on each layer leaves one gap: at the top on the first layer, at
+    // the bottom on the second, further round. Y's through-hole pads take the
+    // first layer's gap first; X's pads are on that layer only, there are no
+    // vias, and negotiation may rip nothing up. Y moves to the second layer.
+    let design = DesignBuilder::new(20.0, 6.0)
+        .layers(2)
+        .without_vias()
+        .keepout(
+            wall(at(9.5, 0.0), at(10.5, 5.3)),
+            Some(0),
+            KeepoutScope::Everything,
+        )
+        .keepout(
+            wall(at(9.5, 1.0), at(10.5, 6.0)),
+            Some(1),
+            KeepoutScope::Everything,
+        )
+        .tht("Y1", Some("Y"), at(2.0, 4.6), 0.6)
+        .tht("Y2", Some("Y"), at(18.0, 4.6), 0.6)
+        .smd("X1", Some("X"), at(3.0, 5.55), 0.4, 0)
+        .smd("X2", Some("X"), at(17.0, 5.55), 0.4, 0)
+        .build();
+    let without_rip_up = Profile {
+        max_rip_ups: 0,
+        ..profile()
+    };
+    let result = route_with(&design, &without_rip_up, &[("Y1", "Y2"), ("X1", "X2")]);
+    assert_eq!(result.unrouted, []);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
+fn a_shoved_connection_shoves_another_in_turn() {
+    // On the first layer a wall leaves two gaps, at the top and in the
+    // middle, each wide enough for one track; on the second, one gap at the
+    // bottom. Z's through-hole pads take the middle gap first, Y the top one;
+    // X and Y have pads on the first layer only, and there are no vias. X
+    // shoves Y to the middle gap, and Y shoves Z on to the second layer.
+    let walls = [
+        (wall(at(9.5, 0.0), at(10.5, 15.8)), 0),
+        (wall(at(9.5, 16.2), at(10.5, 28.3)), 0),
+        (wall(at(9.5, 28.7), at(10.5, 30.0)), 0),
+        (wall(at(9.5, 0.0), at(10.5, 6.8)), 1),
+        (wall(at(9.5, 7.2), at(10.5, 30.0)), 1),
+    ];
+    let mut builder = DesignBuilder::new(20.0, 30.0).layers(2).without_vias();
+    for (shape, layer) in walls {
+        builder = builder.keepout(shape, Some(layer), KeepoutScope::Everything);
+    }
+    let design = builder
+        .tht("Z1", Some("Z"), at(2.0, 17.0), 0.6)
+        .tht("Z2", Some("Z"), at(18.0, 17.0), 0.6)
+        .smd("Y1", Some("Y"), at(2.0, 26.0), 0.4, 0)
+        .smd("Y2", Some("Y"), at(18.0, 26.0), 0.4, 0)
+        .smd("X1", Some("X"), at(2.0, 28.5), 0.4, 0)
+        .smd("X2", Some("X"), at(18.0, 28.5), 0.4, 0)
+        .build();
+    let without_rip_up = Profile {
+        max_rip_ups: 0,
+        ..short_detours()
+    };
+    let result = route_with(
+        &design,
+        &without_rip_up,
+        &[("Z1", "Z2"), ("Y1", "Y2"), ("X1", "X2")],
+    );
+    assert_eq!(result.unrouted, []);
+    assert_legal(&design, &result.routes);
+}
+
+#[test]
 fn says_which_connection_ripped_up_which_and_where_they_met() {
     // Y takes the top gap first; X can reach no other and rips it up there.
     let design = two_gaps();
@@ -941,18 +1013,20 @@ fn a_pad_whose_ways_out_routed_copper_took_is_not_hemmed_in() {
     // B1, small and off the grid, sits in a pocket of keepouts that leaves it
     // only the way up along its axis; A's track runs across the pocket's mouth,
     // as close as the clearance allows, before B is routed, with no rip-up.
+    // The pocket reaches down to the board's edge and B2 sits at the top
+    // edge, so A has no way round B and cannot be shoved aside.
     let pocket = |min, max| (wall(min, max), None, KeepoutScope::Everything);
     let mut builder = DesignBuilder::new(20.0, 10.0).layers(1);
     for (shape, layer, scope) in [
-        pocket(at(9.0, 4.0), at(9.91, 5.15)),
-        pocket(at(10.19, 4.0), at(11.0, 5.15)),
-        pocket(at(9.0, 4.0), at(11.0, 4.91)),
+        pocket(at(9.0, 0.0), at(9.91, 5.15)),
+        pocket(at(10.19, 0.0), at(11.0, 5.15)),
+        pocket(at(9.0, 0.0), at(11.0, 4.91)),
     ] {
         builder = builder.keepout(shape, layer, scope);
     }
     let design = builder
         .smd("B1", Some("B"), at(10.05, 5.05), 0.2, 0)
-        .smd("B2", Some("B"), at(10.0, 9.0), 0.5, 0)
+        .smd("B2", Some("B"), at(10.0, 9.6), 0.5, 0)
         .smd("A1", Some("A"), at(2.0, 5.5), 0.5, 0)
         .smd("A2", Some("A"), at(18.0, 5.5), 0.5, 0)
         .build();
@@ -1031,13 +1105,14 @@ fn past_its_deadline_routing_searches_no_further_than_each_window() {
 #[test]
 fn a_connection_only_routed_copper_cuts_off_is_not_named_cut_off() {
     // A's track crosses the one-layer board from edge to edge before B is
-    // routed, with no rip-up: B1 lies below it, B2 above.
+    // routed, with no rip-up: B1 lies below it, B2 above, each at an edge, so
+    // A has no way round B and cannot be shoved aside.
     let design = DesignBuilder::new(20.0, 10.0)
         .layers(1)
         .smd("A1", Some("A"), at(0.5, 5.0), 0.5, 0)
         .smd("A2", Some("A"), at(19.5, 5.0), 0.5, 0)
-        .smd("B1", Some("B"), at(10.0, 2.0), 0.5, 0)
-        .smd("B2", Some("B"), at(10.0, 8.0), 0.5, 0)
+        .smd("B1", Some("B"), at(10.0, 0.4), 0.5, 0)
+        .smd("B2", Some("B"), at(10.0, 9.6), 0.5, 0)
         .build();
     let no_rip_up = Profile {
         max_rip_ups: 0,

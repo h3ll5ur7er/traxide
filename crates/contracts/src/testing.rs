@@ -2,7 +2,7 @@
 
 use crate::{
     Design, DesignRules, Keepout, KeepoutScope, Layer, LayerId, LayerShape, Net, NetClass,
-    NetClassId, NetId, Pad, PadId, Plane, Routes, ViaKind, ViaKindId,
+    NetClassId, NetId, Pad, PadId, PairGeometry, Plane, Routes, ViaKind, ViaKindId,
 };
 use traxide_geometry::{Point, Polygon, Rect, Region, Shape};
 
@@ -45,6 +45,7 @@ impl DesignBuilder {
                     track_width: mm(0.2),
                     clearance: mm(0.2),
                     via_kinds: vec![ViaKindId(0)],
+                    pair: None,
                 }],
                 default_class: NetClassId(0),
                 edge_clearance: mm(0.2),
@@ -86,6 +87,16 @@ impl DesignBuilder {
 
     pub fn track_width(mut self, width_mm: f64) -> Self {
         self.design.rules.classes[0].track_width = mm(width_mm);
+        self
+    }
+
+    /// Routes differential pairs: nets named alike but for a closing `+`
+    /// and `-`, or `P` and `N`, as tracks `width_mm` wide, `gap_mm` apart.
+    pub fn differential_pairs(mut self, width_mm: f64, gap_mm: f64) -> Self {
+        self.design.rules.classes[0].pair = Some(PairGeometry {
+            width: mm(width_mm),
+            gap: mm(gap_mm),
+        });
         self
     }
 

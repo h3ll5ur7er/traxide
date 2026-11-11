@@ -345,6 +345,33 @@ impl LayoutAccess for Layout<'_> {
         )
     }
 
+    fn track_overlaps(
+        &self,
+        net: NetId,
+        layer: LayerId,
+        segment: Segment,
+        width: i32,
+    ) -> Vec<ConnectionId> {
+        let shape = Shape::track(segment, width);
+        let mut overlapped = Vec::new();
+        for id in self.layers[layer.index()].candidates(shape.bounds()) {
+            let obstacle = &self.obstacles[id];
+            let Owner::Routed {
+                net: other,
+                connection,
+            } = obstacle.owner
+            else {
+                continue;
+            };
+            if other != net && shape.is_closer_than(&obstacle.shape, 0) {
+                overlapped.push(connection);
+            }
+        }
+        overlapped.sort_unstable();
+        overlapped.dedup();
+        overlapped
+    }
+
     fn via_obstruction(&self, via: &Via) -> Obstruction {
         self.via_obstruction_of(via, Wanted::All)
     }
