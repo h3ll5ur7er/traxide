@@ -17,6 +17,20 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Long searches narrowed to a coarser way's corridor, with a time limit (M2, TRX-48)
+
+LogicBoard's long searches, of connections 100 to 165 mm long, flooded their windows: up to 4.5 million states popped from a window of 3.2 million, as negotiation's prices made the ways 1.4 to 2 times dearer than the straight distance its estimate counts. Given a time limit, a search whose window holds a quarter of a million grid nodes or more on each layer now first searches a grid five times coarser, 0.5 mm, at the same prices, and keeps the fine search to 2 mm either side of the way it finds; where that finds nothing, it searches the whole window. On the 20 boards CI leaves incomplete and TokenBoard, each within 90 s, against the same build without it:
+
+| | Without | **Narrowed** |
+| --- | --- | --- |
+| Nets complete | 2,608 | **2,612** |
+| Vias | 8,318 | 8,300 |
+| Track | 133,830 mm | 132,993 mm |
+
+LogicBoard 343 of 343 nets instead of 330, TokenBoard 223 new vias instead of 238; bm01 89 and Issue208 238 instead of 93 and 242 in that run, 90 and 238 against 89 and 238 when routed again, so within the noise at the limit. With the default profile, LogicBoard within 60 s completes 337 nets instead of 317.
+
+Not without a limit: with `--profile fast` and no limit, on 29 boards, it routed as many nets 4 % faster (TokenBoard in 144 s instead of 165 s) but with 2,640 vias instead of 2,590 (Issue015 81 instead of 56, Issue022 112 instead of 95): the corridor holds a connection to a dearer way. Twice as wide a corridor, 4 mm, lay in between (Issue015 59, LogicBoard 327 within 60 s); narrowing only windows of a million nodes or more left LogicBoard as it was. So routing narrows only against a time limit, where time is what is short.
+
 ## Measured and not built: a heavier search heuristic (November 2026)
 
 LogicBoard (Issue219) completes 342 of 343 nets in one CI run and 306 in the next: it routes against CI's 90 s limit, and on this machine 306 nets within 45 s, 317 within 60 s, 330 within 90 s. With `--profile fast` it fares the same, 317 and 332, so routing three ways side by side is not what costs it. Its time goes to a few long searches: of 65 s of searching within 60 s, 20 searches of connections 120 to 165 mm long took 33 s, the slowest 4.6 s, while the other threads waited for them; batches held 3.6 connections on average. Corridors from global routing ([[TRX-26]]) left 298 nets complete within 60 s. A heuristic weight of 1.5 instead of 1.2 completed it, 343 of 343 within 60 s, but on the 20 boards CI leaves incomplete and TokenBoard, each within 90 s, it completed 2,586 nets instead of 2,608: LogicBoard 343 instead of 330 and smoothieboard 245 instead of 237, but Board-Unrouted 180 instead of 195, Protein 158 instead of 167, VGA 100 instead of 108; TokenBoard 5 vias more. Not built.

@@ -50,7 +50,7 @@ pub(crate) struct Scratch {
     finish_stub: Stamped<Stub>,
     /// Every state expanded, in order, for tests to look into a search.
     #[cfg(test)]
-    expanded: Vec<u32>,
+    pub(crate) expanded: Vec<u32>,
 }
 
 /// A state of the search: a node, a layer and the heading it was entered with.

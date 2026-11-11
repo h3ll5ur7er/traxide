@@ -27,6 +27,20 @@ use traxide_contracts::{
 };
 use traxide_events::{CancelToken, Publisher, Silent};
 
+/// How many times coarser than the profile's grid a narrowing search runs
+/// (`Finder::narrowed`): 0.5 mm on the default 0.1 mm grid, which LogicBoard
+/// completed within 60 s, 341 of 343 nets instead of 309 (TRX-48).
+const COARSENING: i32 = 5;
+
+/// How many cells of the coarser grid either side of its way a narrowed search
+/// may run in: 2 mm on the default grid. Twice as many, 4 mm, completed
+/// LogicBoard less within 60 s, 327 nets.
+const CORRIDOR_REACH: i32 = 4;
+
+/// The fewest grid nodes of a search's window worth narrowing, on each layer:
+/// a quarter of a million. From a million, LogicBoard gained nothing.
+const NARROWED_WINDOW_NODES: i64 = 250_000;
+
 /// How many connections a batch looks through for each connection it may hold.
 const SCANNED_PER_BATCH_SLOT: usize = 4;
 
@@ -168,6 +182,7 @@ impl<'a> Router<'a> {
                 rules,
                 profile,
                 directions: search::Directions::default(),
+                narrows: false,
             },
             scratches: vec![search::Scratch::default()],
             deadline: None,
@@ -186,7 +201,10 @@ impl<'a> Router<'a> {
     /// left unrouted is shoved for, and the routes tidied, until `deadline`.
     /// Searching for what is queued ends a little later at most: a tenth of
     /// the time given, or a second (SEARCHING_PAST_THE_DEADLINE).
+    /// With time short, a search of a large window keeps to the corridor of
+    /// the way a coarser grid finds first (`Finder::narrowed`).
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.finder.narrows = true;
         let now = Instant::now();
         let given = deadline.saturating_duration_since(now);
         let past = (given / SEARCHING_PAST_THE_DEADLINE).max(LEAST_SEARCHING_PAST_THE_DEADLINE);
@@ -392,6 +410,7 @@ impl<'a> Router<'a> {
                 rules: self.finder.rules,
                 profile,
                 directions,
+                narrows: self.finder.narrows,
             },
             scratches: (0..threads).map(|_| search::Scratch::default()).collect(),
             deadline: self.deadline,
@@ -483,6 +502,7 @@ impl<'a> Router<'a> {
         };
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         for (i, routed) in attempt.routed.iter_mut().enumerate() {
@@ -523,10 +543,12 @@ impl<'a> Router<'a> {
         let (dearer, roomier) = self.moving_profiles();
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         let room_finder = Finder {
             profile: &roomier,
+            narrows: false,
             ..self.finder
         };
         let no_history = history::History::new(self.finder.design, 0);
@@ -626,10 +648,12 @@ impl<'a> Router<'a> {
         let (dearer, roomier) = self.moving_profiles();
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         let room_finder = Finder {
             profile: &roomier,
+            narrows: false,
             ..self.finder
         };
         let no_history = history::History::new(self.finder.design, 0);
@@ -752,6 +776,7 @@ impl<'a> Router<'a> {
         };
         let finder = Finder {
             profile: &dearer,
+            narrows: false,
             ..self.finder
         };
         let deadline = self.deadline;
@@ -1244,6 +1269,9 @@ struct Finder<'a> {
     rules: &'a ConstraintSet,
     profile: &'a Profile,
     directions: search::Directions,
+    /// Whether a search of a large window first keeps to the corridor of the
+    /// way a coarser grid finds (`narrowed`).
+    narrows: bool,
 }
 
 impl Finder<'_> {
@@ -1295,10 +1323,116 @@ impl Finder<'_> {
             self.search(scratch, connection, layout, negotiation, Some((c, id)))
                 .ok()
         });
-        in_corridor.map_or_else(
-            || self.search(scratch, connection, layout, negotiation, None),
-            Ok,
+        if let Some(found) = in_corridor {
+            return Ok(found);
+        }
+        if corridors.is_none() && self.narrows {
+            let narrowed = self.narrowed(scratch, connection, layout, negotiation);
+            if let Some(corridor) = narrowed
+                && let Ok(found) = self.search(
+                    scratch,
+                    connection,
+                    layout,
+                    negotiation,
+                    Some((&corridor, ConnectionId(0))),
+                )
+            {
+                return Ok(found);
+            }
+        }
+        self.search(scratch, connection, layout, negotiation, None)
+    }
+
+    /// For a search of a window of NARROWED_WINDOW_NODES grid nodes or more,
+    /// the corridor CORRIDOR_REACH cells either side of the way a grid
+    /// COARSENING times coarser finds, at the same prices: a long search that
+    /// pays for crossing routed copper floods most of its window, as its
+    /// estimate knows nothing of those prices; on the coarser grid it floods a
+    /// small fraction of the states, and the fine search only the corridor
+    /// (TRX-48). The corridor, as the corridors of global routing, the way for
+    /// connection 0.
+    fn narrowed(
+        &self,
+        scratch: &mut search::Scratch,
+        connection: Connection,
+        layout: &impl LayoutAccess,
+        negotiation: Option<search::Negotiation>,
+    ) -> Option<Corridors> {
+        let pitch = self.profile.grid_pitch;
+        let window = search::window(self.design, self.profile.detour_margin, connection, None);
+        let across = |min: i32, max: i32| i64::from((max - min) / pitch + 1);
+        let nodes = across(window.min.x, window.max.x) * across(window.min.y, window.max.y);
+        if nodes < NARROWED_WINDOW_NODES {
+            return None;
+        }
+        // An edge of the coarser grid spans COARSENING of the finer, so it
+        // pays as much for what it crosses as they would together.
+        let coarser = Profile {
+            grid_pitch: pitch * COARSENING,
+            rip_up_cost: self.profile.rip_up_cost * i64::from(COARSENING),
+            ..self.profile.clone()
+        };
+        let negotiation = negotiation.map(|n| search::Negotiation {
+            present: n.present.map(|present| match present {
+                search::Present::PerEdge(price) => {
+                    search::Present::PerEdge(price * i64::from(COARSENING))
+                }
+                per_crossing => per_crossing,
+            }),
+            ..n
+        });
+        let steps = search::Search::new(
+            self.design,
+            self.rules,
+            &coarser,
+            connection,
+            layout,
+            negotiation,
+            None,
         )
+        .with_directions(self.directions)
+        .run(scratch)
+        .ok()?;
+        let cell = coarser.grid_pitch;
+        let origin = Point::new(
+            (window.min.x.div_euclid(cell) - 1) * cell,
+            (window.min.y.div_euclid(cell) - 1) * cell,
+        );
+        let columns = (window.max.x - origin.x) / cell + 2;
+        let rows = (window.max.y - origin.y) / cell + 2;
+        let mut cells = BTreeSet::new();
+        let mut around = |at: Point| {
+            let (column, row) = (
+                (at.x - origin.x).div_euclid(cell),
+                (at.y - origin.y).div_euclid(cell),
+            );
+            for r in (row - CORRIDOR_REACH).max(0)..=(row + CORRIDOR_REACH).min(rows - 1) {
+                for c in
+                    (column - CORRIDOR_REACH).max(0)..=(column + CORRIDOR_REACH).min(columns - 1)
+                {
+                    cells.insert((r * columns + c) as u32);
+                }
+            }
+        };
+        for (step, next) in steps.iter().zip(steps.iter().skip(1)) {
+            let (a, b) = (step.at, next.at);
+            let pieces = (a.distance(b) / i64::from(cell / 2)).max(1);
+            for k in 0..=pieces {
+                around(Point::new(
+                    a.x + (i64::from(b.x - a.x) * k / pieces) as i32,
+                    a.y + (i64::from(b.y - a.y) * k / pieces) as i32,
+                ));
+            }
+        }
+        if let Some(first) = steps.first() {
+            around(first.at);
+        }
+        Some(Corridors::new(
+            origin,
+            cell,
+            columns,
+            vec![cells.into_iter().collect()],
+        ))
     }
 
     fn search(
@@ -2162,6 +2296,130 @@ mod tests {
             holding_pads_left(&design, connection, &grown_from_p1, &sides, &[None]),
             Some(Vec::new())
         );
+    }
+
+    /// A board 120 by 40 mm with pads A1 at `from` and A2 at `to`, which
+    /// only a way past `walls` joins.
+    fn across_a_board(from: Point, to: Point, walls: &[Rect]) -> Design {
+        let mut builder = DesignBuilder::new(120.0, 40.0)
+            .smd("A1", Some("A"), from, 0.6, 0)
+            .smd("A2", Some("A"), to, 0.6, 0);
+        for &wall in walls {
+            let shape = traxide_contracts::geometry::Shape::Polygon(
+                traxide_contracts::geometry::Polygon::rectangle(wall),
+            );
+            builder = builder.keepout(shape, None, KeepoutScope::Everything);
+        }
+        builder.build()
+    }
+
+    /// Searches A1 to A2 once, narrowed or not, and counts the states expanded.
+    fn search_across(design: &Design, narrows: bool) -> (Result<Routes, NoRoute>, usize) {
+        // The default profile's.
+        let profile = Profile {
+            name: "default".into(),
+            grid_pitch: 100_000,
+            via_cost: 2_000_000,
+            bend_cost: 100_000,
+            detour_margin: 5_000_000,
+            rip_up_cost: 5_000_000,
+            max_rip_ups: 20,
+            history_cost: 2_000_000,
+            heuristic_weight: 1.2,
+            global_routing: false,
+            batch_size: 16,
+            against_layer_direction: 0.0,
+            rounds: 1,
+        };
+        let rules = traxide_rules::compile(
+            design,
+            Purpose::Routing {
+                grid_pitch: profile.grid_pitch,
+            },
+        );
+        let layout = Layout::build(design, &rules);
+        let finder = Finder {
+            design,
+            rules: &rules,
+            profile: &profile,
+            directions: search::Directions::default(),
+            narrows,
+        };
+        let connection = Connection {
+            net: design.net_named("A"),
+            from: design.pad_named("A1"),
+            to: design.pad_named("A2"),
+        };
+        let mut scratch = search::Scratch::default();
+        let found = finder.find(
+            &mut scratch,
+            ConnectionId(0),
+            connection,
+            None,
+            &layout,
+            None,
+        );
+        (found, scratch.expanded.len())
+    }
+
+    #[test]
+    fn a_long_search_narrowed_to_a_coarser_ways_corridor_expands_under_half_the_states() {
+        // A1 in a cup that opens away from A2: the search floods the cup and
+        // everything its estimate takes for cheaper than the way out.
+        let wall = |x0, y0, x1, y1| Rect {
+            min: at(x0, y0),
+            max: at(x1, y1),
+        };
+        let design = across_a_board(
+            at(10.0, 20.0),
+            at(115.0, 38.0),
+            &[
+                wall(20.0, 14.0, 21.0, 30.0),
+                wall(6.5, 29.0, 21.0, 30.0),
+                wall(6.5, 14.0, 21.0, 15.0),
+            ],
+        );
+        let (whole, everywhere) = search_across(&design, false);
+        let (narrowed, in_corridor) = search_across(&design, true);
+        assert!(whole.is_ok() && narrowed.is_ok());
+        assert!(
+            in_corridor * 2 < everywhere,
+            "{in_corridor} states narrowed, {everywhere} not"
+        );
+    }
+
+    #[test]
+    fn a_passage_too_narrow_for_the_coarser_grid_is_still_found() {
+        // A track's centre fits between the walls at y 15.3 mm only, which a
+        // grid of 0.5 mm never reaches.
+        let design = across_a_board(
+            at(5.0, 5.0),
+            at(115.0, 35.0),
+            &[
+                Rect {
+                    min: at(49.0, 0.0),
+                    max: at(51.0, 15.15),
+                },
+                Rect {
+                    min: at(49.0, 15.4),
+                    max: at(51.0, 40.0),
+                },
+            ],
+        );
+        let (found, _) = search_across(&design, true);
+        let routes = found.expect("a way through the passage");
+        let through = routes
+            .tracks
+            .iter()
+            .flat_map(|t| t.path.windows(2))
+            .any(|w| {
+                let (left, right) = (w[0].x.min(w[1].x), w[0].x.max(w[1].x));
+                w[0].y == at(0.0, 15.3).y
+                    && w[1].y == w[0].y
+                    && left <= at(49.0, 0.0).x
+                    && right >= at(51.0, 0.0).x
+            });
+        assert!(through, "{routes:?}");
     }
 
     #[test]
