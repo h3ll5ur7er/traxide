@@ -17,6 +17,10 @@ time target/release/traxide route -q target/e2e/matrix-6x17/matrix-6x17.dsn
 
 The machine: a 4-core cloud container (x86-64), one thread used.
 
+## Measured and not built: a heavier search heuristic (November 2026)
+
+LogicBoard (Issue219) completes 342 of 343 nets in one CI run and 306 in the next: it routes against CI's 90 s limit, and on this machine 306 nets within 45 s, 317 within 60 s, 330 within 90 s. With `--profile fast` it fares the same, 317 and 332, so routing three ways side by side is not what costs it. Its time goes to a few long searches: of 65 s of searching within 60 s, 20 searches of connections 120 to 165 mm long took 33 s, the slowest 4.6 s, while the other threads waited for them; batches held 3.6 connections on average. Corridors from global routing ([[TRX-26]]) left 298 nets complete within 60 s. A heuristic weight of 1.5 instead of 1.2 completed it, 343 of 343 within 60 s, but on the 20 boards CI leaves incomplete and TokenBoard, each within 90 s, it completed 2,586 nets instead of 2,608: LogicBoard 343 instead of 330 and smoothieboard 245 instead of 237, but Board-Unrouted 180 instead of 195, Protein 158 instead of 167, VGA 100 instead of 108; TokenBoard 5 vias more. Not built.
+
 ## Differential pairs routed side by side (M5, TRX-38)
 
 TokenBoard's USB pair, USB_D_P and USB_D_N in the USB class (0.2 mm tracks, 0.25 mm apart), ran nowhere near each other: routed within 90 s, no stretch of either lay within 0.45 ± 0.05 mm of the other on its layer. The board's author coupled about a third: of USB_D_P's 155 mm, 38 mm within 0.4 to 0.7 mm of USB_D_N. Each pair's connections that start beside each other and end beside each other are now routed first, as one centre line 0.65 mm wide split into the two tracks, with two vias side by side where it changes layers; they stay as the board's own wiring. Where the pads at one end leave no room to fan in, as among the MCU's fan-out at R6 and R7, the tracks stop at the launch point in front of them and the router joins each pad there. This machine, `--time-limit 90`:
