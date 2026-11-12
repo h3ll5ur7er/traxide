@@ -20,6 +20,6 @@ For USB D+/D− first.
 - [x] TokenBoard within 90 s: the USB pair 89 % coupled instead of 0 % (first reported as 79 %, measured by a script that missed tracks), 238 vias instead of 241, every net complete, no rule broken ([[Benchmarks]])
 - [x] The corpus gate passes (Benchmark run 177)
 - [ ] Pose-based coupled A* (position and heading), so that a pair need not leave its pads square to them
-- [x] Stitching vias next to layer changes: beside each pair of vias, a via of the net whose planes and pours cover most of their layers there, two at least, outside the positive via, else the negative, else ahead or behind (`a_pair_changing_layers_over_a_ground_pour_takes_a_ground_via_beside_its_vias`); on TokenBoard a GND via beside each of the USB pair's two pairs of vias
+- [x] Stitching vias next to layer changes: beside each pair of vias, a via of the net whose planes and pours cover most of their layers there, two at least, outside the positive via, else the negative, else ahead or behind (`a_pair_changing_layers_over_a_ground_pour_takes_a_ground_via_beside_its_vias`); on TokenBoard a GND via beside each of the USB pair's two pairs of vias; the corpus gate passes (Benchmark run 180)
 
 **Depends on:** [[TRX-27]], [[TRX-32]]
