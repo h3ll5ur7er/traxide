@@ -247,7 +247,7 @@ fn width(rect: Rect) -> i32 {
 
 mod storing {
     use super::*;
-    use traxide_board_access::{BoardError, store_routes};
+    use traxide_board_access::{BoardError, store_in_place_of_wiring, store_routes};
     use traxide_contracts::{NetId, Routes, Track, Via};
 
     fn routes(design: &Design) -> Routes {
@@ -300,6 +300,56 @@ mod storing {
         let stored = std::fs::read_to_string(&output).expect("stored");
         assert!(stored.contains("(locked yes)"), "{stored}");
         assert!(!stored.contains("(start 1 2)"), "{stored}");
+    }
+
+    #[test]
+    fn optimised_wiring_takes_the_place_of_the_unlocked_segments_and_vias() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let board = std::fs::read_to_string(fixture("crossing.kicad_pcb")).expect("fixture");
+        let end = board
+            .trim_end()
+            .rfind(')')
+            .expect("the board's closing parenthesis");
+        let wiring = "\t(segment (start 1 1) (end 2 1) (width 0.2) (layer \"F.Cu\") (locked yes) (net \"ACROSS\"))\n\
+                      \t(segment (start 1 2) (end 2 2) (width 0.2) (layer \"F.Cu\") (net \"ACROSS\"))\n\
+                      \t(arc (start 1 3) (mid 1.5 3.2) (end 2 3) (width 0.2) (layer \"F.Cu\") (net \"ACROSS\"))\n\
+                      \t(via (at 3 3) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net \"ACROSS\"))\n";
+        let input = folder.path().join("wired.kicad_pcb");
+        std::fs::write(&input, format!("{}{wiring})\n", &board[..end])).expect("written");
+        let design = load_design(&input).expect("a valid board");
+        let output = folder.path().join("optimised.kicad_pcb");
+        let new = routes(&design);
+        store_in_place_of_wiring(&output, &input, &design, &new).expect("stored");
+        let stored = std::fs::read_to_string(&output).expect("stored");
+        assert!(stored.contains("(locked yes)"), "{stored}");
+        assert!(stored.contains("(arc"), "{stored}");
+        assert!(!stored.contains("(start 1 2)"), "{stored}");
+        assert!(!stored.contains("(at 3 3)"), "{stored}");
+        let optimised = load_design(&output).expect("a valid board");
+        assert_eq!(optimised.existing.vias, new.vias);
+        assert_eq!(
+            optimised.existing.tracks.len(),
+            1 + 1 + 2,
+            "locked, arc, new"
+        );
+    }
+
+    #[test]
+    fn optimised_wiring_is_not_stored_into_a_board_changed_since_it_was_read() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let input = folder.path().join("crossing.kicad_pcb");
+        std::fs::copy(fixture("crossing.kicad_pcb"), &input).expect("copied");
+        let design = load_design(&input).expect("a valid board");
+        let changed = std::fs::read_to_string(&input).expect("read").replacen(
+            "(net \"DOWN\")",
+            "(net \"ACROSS\")",
+            1,
+        );
+        std::fs::write(&input, changed).expect("written");
+        let output = folder.path().join("optimised.kicad_pcb");
+        let error = store_in_place_of_wiring(&output, &input, &design, &routes(&design))
+            .expect_err("changed");
+        assert!(matches!(error, BoardError::Changed { .. }), "{error}");
     }
 
     #[test]
