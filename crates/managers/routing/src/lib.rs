@@ -235,6 +235,176 @@ fn nets_to_route(design: &Design, nets: &Nets) -> Result<Vec<bool>, RouteError> 
     Ok(chosen)
 }
 
+/// Optimise the board's own wiring in `input` and store it in `output`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptimiseJob {
+    /// A KiCad board file, or [`RUNNING_KICAD`] for the board open in KiCad.
+    pub input: PathBuf,
+    /// Beside the input by default, `BOARD.optimised.kicad_pcb`; back into
+    /// KiCad for the board open in it.
+    pub output: Option<PathBuf>,
+}
+
+/// What optimising did to the board's unlocked segments and vias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptimiseReport {
+    pub segments_before: usize,
+    pub segments_after: usize,
+    /// The length of their track, in nanometres.
+    pub length_before: i64,
+    pub length_after: i64,
+    /// Whether the optimised wiring was stored: not where it would break a
+    /// rule the board did not break, nor where it changed nothing.
+    pub stored: bool,
+    /// The independent check of the board as stored, or as it was where
+    /// nothing was stored.
+    pub verdict: Verdict,
+    pub output: PathBuf,
+    /// The running KiCad refilled the board's copper zones: taking the
+    /// optimisation back takes two undos.
+    pub zones_refilled: bool,
+    /// The board file keeps the fills its zones came with.
+    pub zones_to_refill: bool,
+    pub elapsed: Duration,
+}
+
+/// Makes the board's own unlocked wiring shorter and simpler (UC4): its
+/// segments, chained where nothing else joins their net, pulled tight among
+/// the rest of the board; arcs, locked copper and the tracks of differential
+/// pairs stay as they are. Stored
+/// only where it changes something and breaks no rule the board did not
+/// break before, judged by the Verification Engine.
+pub fn optimise(
+    job: &OptimiseJob,
+    events: &impl Publisher<Event>,
+    cancel: &CancelToken,
+) -> Result<OptimiseReport, RouteError> {
+    let started = Instant::now();
+    events.publish(Event::StageStarted(Stage::Loading));
+    let design = traxide_board_access::load_design(&job.input)?;
+    let profile = traxide_profile_access::load_profile("default", None)?;
+    events.publish(Event::StageStarted(Stage::CompilingRules));
+    let rules = traxide_rules::compile(
+        &design,
+        Purpose::Routing {
+            grid_pitch: profile.grid_pitch,
+        },
+    );
+    let verification_rules = traxide_rules::compile(&design, Purpose::Verification);
+    // A differential pair's tracks run side by side, which pulling each tight
+    // on its own would undo: they stay as they are, as arcs and locked copper.
+    let paired = |net: NetId| rules.pair_of(net).is_some();
+    let unlocked = Routes {
+        tracks: (design.existing.tracks.iter())
+            .filter(|t| !design.locked.tracks.contains(t))
+            .cloned()
+            .collect(),
+        vias: (design.existing.vias.iter())
+            .filter(|v| !design.locked.vias.contains(v))
+            .cloned()
+            .collect(),
+    };
+    let split = |of_a_pair: bool| Routes {
+        tracks: (unlocked.tracks.iter())
+            .filter(|t| paired(t.net) == of_a_pair)
+            .cloned()
+            .collect(),
+        vias: (unlocked.vias.iter())
+            .filter(|v| paired(v.net) == of_a_pair)
+            .cloned()
+            .collect(),
+    };
+    let (of_pairs, rest) = (split(true), split(false));
+    let arcs: Vec<_> = (rest.tracks.iter())
+        .filter(|t| t.path.len() > 2)
+        .cloned()
+        .collect();
+    let segments = |routes: &Routes| -> usize {
+        (routes.tracks.iter())
+            .filter(|t| !arcs.contains(t))
+            .map(|t| t.path.len().saturating_sub(1))
+            .sum()
+    };
+    let length = |routes: &Routes| -> i64 {
+        (routes.tracks.iter())
+            .filter(|t| !arcs.contains(t))
+            .flat_map(|t| t.path.windows(2))
+            .map(|w| w[0].distance(w[1]))
+            .sum()
+    };
+    let mut as_they_are = design.locked.clone();
+    as_they_are.extend(of_pairs.clone());
+    let mut kept = as_they_are.clone();
+    kept.tracks.extend(arcs.iter().cloned());
+    events.publish(Event::StageStarted(Stage::Optimising));
+    let mut fixed = design.clone();
+    fixed.existing = as_they_are;
+    let mut layout = Layout::build(&fixed, &rules);
+    let optimised = traxide_optimization::optimise(&design, &rest, &mut layout);
+    let arc_pieces: Vec<_> = (arcs.iter())
+        .flat_map(|arc| {
+            arc.path.windows(2).map(|w| traxide_contracts::Track {
+                path: vec![w[0], w[1]],
+                ..arc.clone()
+            })
+        })
+        .collect();
+    let optimised = Routes {
+        tracks: (optimised.tracks.into_iter())
+            .filter(|t| !arc_pieces.contains(t))
+            .collect(),
+        vias: optimised.vias,
+    };
+    events.publish(Event::StageStarted(Stage::Verifying));
+    let before = traxide_verification::verify(&design, &verification_rules, &design.existing);
+    let mut everything = kept.clone();
+    everything.extend(optimised.clone());
+    let after = traxide_verification::verify(&design, &verification_rules, &everything);
+    let output = job.output.clone().unwrap_or_else(|| {
+        if job.input.as_os_str() == RUNNING_KICAD {
+            job.input.clone()
+        } else {
+            job.input.with_extension("optimised.kicad_pcb")
+        }
+    });
+    let (segments_before, length_before) = (segments(&rest), length(&rest));
+    let (segments_after, length_after) = (segments(&optimised), length(&optimised));
+    let improves = (segments_after, length_after) != (segments_before, length_before);
+    let breaks_nothing_new = after.violations.len() <= before.violations.len();
+    let store = improves && breaks_nothing_new && !cancel.is_cancelled();
+    let mut report = OptimiseReport {
+        segments_before,
+        segments_after,
+        length_before,
+        length_after,
+        stored: store,
+        verdict: if store { after } else { before },
+        output: output.clone(),
+        zones_refilled: false,
+        zones_to_refill: false,
+        elapsed: Duration::ZERO,
+    };
+    if store {
+        events.publish(Event::StageStarted(Stage::Storing));
+        // In place of all the board's unlocked segments and vias: the pairs'
+        // among them go back as they were.
+        let mut wiring = optimised.clone();
+        wiring.extend(Routes {
+            tracks: (of_pairs.tracks.iter())
+                .filter(|t| t.path.len() == 2)
+                .cloned()
+                .collect(),
+            vias: of_pairs.vias.clone(),
+        });
+        let stored =
+            traxide_board_access::store_in_place_of_wiring(&output, &job.input, &design, &wiring)?;
+        report.zones_refilled = stored.zones_refilled;
+        report.zones_to_refill = stored.zones_to_refill;
+    }
+    report.elapsed = started.elapsed();
+    Ok(report)
+}
+
 /// `design` with `routes` as its own wiring.
 fn with_wiring(design: &Design, routes: &Routes) -> Design {
     let mut design = design.clone();

@@ -12,7 +12,7 @@ use std::time::Duration;
 use traxide_contracts::{Event, Stage, Violation};
 use traxide_events::CancelToken;
 use traxide_inspection::CheckJob;
-use traxide_routing::{Nets, RouteJob, RouteReport, Unroutable};
+use traxide_routing::{Nets, OptimiseJob, OptimiseReport, RouteJob, RouteReport, Unroutable};
 
 /// A fast PCB autorouter.
 #[derive(Debug, Parser)]
@@ -78,6 +78,22 @@ enum Command {
         #[arg(long, conflicts_with_all = ["input", "net"])]
         selected: bool,
     },
+    /// Optimise a board's own wiring: its unlocked tracks pulled tight, shorter
+    /// and with fewer corners, nothing it joins coming apart; arcs and locked
+    /// copper stay. Stored only where it breaks no rule the board did not.
+    Optimise {
+        /// The board: BOARD.kicad_pcb, with the rules of BOARD.kicad_pro.
+        #[arg(required_unless_present = "kicad")]
+        input: Option<PathBuf>,
+        /// Optimise the board open in KiCad's PCB editor instead, through KiCad's
+        /// API, as one step that Edit → Undo takes back.
+        #[arg(long, conflicts_with = "input")]
+        kicad: bool,
+        /// Where to write the board. By default beside it, a copy
+        /// BOARD.optimised.kicad_pcb (and its project); into KiCad with --kicad.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Check a board: how many of its nets are complete and which rules its
     /// copper breaks, with the routes of a session if one is given.
     Check {
@@ -121,15 +137,20 @@ const SELECTED_NETS_ENTRY_POINT: &str = "traxide-selected";
 const ROUTE_THE_NETS_SELECTED_IN_KICAD: &[&str] =
     &["traxide", "route", "--kicad", "--quiet", "--selected"];
 
+/// The plugin's *Optimise* button starts a copy of traxide by this name.
+const OPTIMISE_ENTRY_POINT: &str = "traxide-optimise";
+
+const OPTIMISE_THE_BOARD_OPEN_IN_KICAD: &[&str] = &["traxide", "optimise", "--kicad"];
+
 /// What the plugin's button that started traxide as `program` does.
 fn button_started_as(program: &str) -> &'static [&'static str] {
-    if Path::new(program)
+    match Path::new(program)
         .file_stem()
-        .is_some_and(|name| name == SELECTED_NETS_ENTRY_POINT)
+        .and_then(|name| name.to_str())
     {
-        ROUTE_THE_NETS_SELECTED_IN_KICAD
-    } else {
-        ROUTE_THE_BOARD_OPEN_IN_KICAD
+        Some(SELECTED_NETS_ENTRY_POINT) => ROUTE_THE_NETS_SELECTED_IN_KICAD,
+        Some(OPTIMISE_ENTRY_POINT) => OPTIMISE_THE_BOARD_OPEN_IN_KICAD,
+        _ => ROUTE_THE_BOARD_OPEN_IN_KICAD,
     }
 }
 
@@ -164,6 +185,19 @@ fn run(cli: Cli, summary: &mut dyn Write) -> Result<ExitCode> {
     let (input, output, profile, config, threads, quiet, drc, time_limit, reroute_existing, nets) =
         match cli.command {
             Command::Freerouting { args } => return run_as_freerouting(&args),
+            Command::Optimise {
+                input,
+                kicad: _,
+                output,
+            } => {
+                let job = OptimiseJob {
+                    input: input.unwrap_or_else(|| PathBuf::from(traxide_routing::RUNNING_KICAD)),
+                    output,
+                };
+                let report = traxide_routing::optimise(&job, &|_| {}, &CancelToken::new())?;
+                summarise_optimised(&report, summary);
+                return Ok(ExitCode::SUCCESS);
+            }
             Command::Check {
                 board,
                 session,
@@ -361,6 +395,50 @@ fn reason(why: &Unroutable) -> String {
 
 /// Writing the summary is a courtesy; a closed stream must not change the
 /// exit code, which tells what routing achieved.
+/// What optimising saved and where it went, or that it stored nothing.
+fn summarise_optimised(report: &OptimiseReport, out: &mut dyn Write) {
+    let millimetres = |nanometres: i64| nanometres as f64 / 1e6;
+    if !report.stored {
+        let unchanged = (report.segments_after, report.length_after)
+            == (report.segments_before, report.length_before);
+        let why = if unchanged {
+            format!(
+                "The board's {} segments are as tight as they fit",
+                report.segments_before
+            )
+        } else {
+            "Pulling the board's tracks tight would break a rule the board does not break"
+                .to_owned()
+        };
+        let _ = writeln!(out, "{why}: the board is left as it was.");
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "Optimised: {} segments instead of {}, {:.1} mm of track instead of {:.1} mm, in {:.2} s → {}",
+        report.segments_after,
+        report.segments_before,
+        millimetres(report.length_after),
+        millimetres(report.length_before),
+        report.elapsed.as_secs_f64(),
+        report.output.display()
+    );
+    if report.zones_refilled {
+        let _ = writeln!(
+            out,
+            "traxide refilled the board's copper zones around the tracks. \
+             Edit → Undo takes back the refill first; a second undo takes back the optimisation."
+        );
+    }
+    if report.zones_to_refill {
+        let _ = writeln!(
+            out,
+            "The board's copper zones keep the fills they came with. \
+             Refill them in KiCad (Edit → Fill All Zones) before checking or plotting the board."
+        );
+    }
+}
+
 fn summarise(report: &RouteReport, out: &mut dyn Write) -> ExitCode {
     let routed = report.connections - report.unrouted.len();
     let _ = writeln!(
@@ -486,6 +564,66 @@ mod tests {
         let summary = summary(&report_into(false, true, "kb.routed.kicad_pcb"));
         assert!(summary.contains("Fill All Zones"), "{summary}");
         assert!(!self::summary(&report(false)).contains("Fill All Zones"));
+    }
+
+    fn optimised(stored: bool) -> OptimiseReport {
+        OptimiseReport {
+            segments_before: 340,
+            segments_after: if stored { 210 } else { 340 },
+            length_before: 1_240_200_000,
+            length_after: if stored { 1_234_500_000 } else { 1_240_200_000 },
+            stored,
+            verdict: Verdict::default(),
+            output: PathBuf::from("kb.optimised.kicad_pcb"),
+            zones_refilled: false,
+            zones_to_refill: false,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    fn optimisation_summary(report: &OptimiseReport) -> String {
+        let mut written = Vec::new();
+        summarise_optimised(report, &mut written);
+        String::from_utf8(written).expect("UTF-8")
+    }
+
+    #[test]
+    fn an_optimisation_says_what_it_saved_and_where_it_went() {
+        let summary = optimisation_summary(&optimised(true));
+        assert!(summary.contains("210 segments instead of 340"), "{summary}");
+        assert!(
+            summary.contains("1234.5 mm of track instead of 1240.2 mm"),
+            "{summary}"
+        );
+        assert!(summary.contains("kb.optimised.kicad_pcb"), "{summary}");
+    }
+
+    #[test]
+    fn an_optimisation_that_stored_nothing_says_the_board_is_as_it_was() {
+        let summary = optimisation_summary(&optimised(false));
+        assert!(summary.contains("left as it was"), "{summary}");
+        assert!(!summary.contains("kb.optimised.kicad_pcb"), "{summary}");
+    }
+
+    #[test]
+    fn an_optimisation_that_would_break_a_rule_says_so() {
+        let summary = optimisation_summary(&OptimiseReport {
+            stored: false,
+            ..optimised(true)
+        });
+        assert!(summary.contains("break a rule"), "{summary}");
+        assert!(summary.contains("left as it was"), "{summary}");
+    }
+
+    #[test]
+    fn the_optimise_button_starts_traxide_by_a_third_name() {
+        for program in ["/plugins/traxide-optimise", "traxide-optimise.exe"] {
+            let button = Cli::try_parse_from(button_started_as(program)).expect("valid");
+            assert!(
+                matches!(button.command, Command::Optimise { kicad: true, .. }),
+                "{program}"
+            );
+        }
     }
 
     #[test]

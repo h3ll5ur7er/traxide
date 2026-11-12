@@ -29,13 +29,13 @@ target/release/traxide freerouting -de board.dsn -do board.ses
 
 ### From inside KiCad
 
-traxide's KiCad plugin adds a **Route board** button to the PCB editor's toolbar (KiCad 9 and 10). It routes every unrouted connection of the open board and adds the routes as one step: *Edit → Undo traxide: route* takes them all back. Its second button, **Route selected nets** (the blue one), routes only the nets of what is selected: tracks, vias, pads, footprints or zones; the rest of the board is kept as it is. The rules come from KiCad's net classes and the project's files. On a board with copper zones traxide then refills them around the routes, a step of its own, so taking the routes back takes two undos.
+traxide's KiCad plugin adds a **Route board** button to the PCB editor's toolbar (KiCad 9 and 10). It routes every unrouted connection of the open board and adds the routes as one step: *Edit → Undo traxide: route* takes them all back. Its second button, **Route selected nets** (the blue one), routes only the nets of what is selected: tracks, vias, pads, footprints or zones; the rest of the board is kept as it is. The third, **Optimise** (the amber one), pulls the board's own unlocked tracks tight, routed by traxide, by hand or by another router: shorter, with fewer corners, nothing they join coming apart; arcs and locked tracks stay as they are. It changes nothing that would break a rule, and *Edit → Undo traxide: optimise* takes it back. The rules come from KiCad's net classes and the project's files. On a board with copper zones traxide then refills them around the routes, a step of its own, so taking the routes back takes two undos.
 
 1. **Enable KiCad's API first**: *Preferences → Preferences… → Plugins → Enable KiCad API*. It is off by default, and **without it KiCad shows no traxide button at all**.
 2. Download the KiCad package for your platform (`traxide-kicad-<version>-<platform>.zip`) from the Releases and install it with *Plugin and Content Manager → Install from File…*.
 3. Restart the PCB editor: the button appears in its top toolbar. In KiCad 10, traxide's report (how much it routed, and what it could not) appears under the warning sign at the right end of the status bar; KiCad 9 shows the routes but not the report.
 
-The package carries the traxide binary itself; there is no Python. From a terminal, `traxide route --kicad` does what the button does, and `traxide route --selected` what the second one does.
+The package carries the traxide binary itself; there is no Python. From a terminal, `traxide route --kicad` does what the button does, `traxide route --selected` what the second one does, and `traxide optimise --kicad` the third; `traxide optimise BOARD.kicad_pcb` writes an optimised copy, `BOARD.optimised.kicad_pcb`, beside a board file.
 
 A copy of the binary named `freerouting` (`freerouting.exe` on Windows) takes Freerouting's arguments too, for tools that run Freerouting.
 
