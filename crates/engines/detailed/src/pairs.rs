@@ -40,11 +40,87 @@ pub fn route_pairs(
     let mut scratch = Scratch::default();
     (coupled.iter().enumerate())
         .map(|(index, pair)| {
-            let routes = couple(design, rules, profile, pair, layout, &mut scratch)?;
-            layout.add_route(ConnectionId::from_index(index), &routes);
+            let mut routes = couple(design, rules, profile, pair, layout, &mut scratch)?;
+            let id = ConnectionId::from_index(index);
+            layout.add_route(id, &routes);
+            let stitching = Routes {
+                tracks: Vec::new(),
+                vias: stitching_vias(design, rules, layout, &routes, pair.pair),
+            };
+            layout.add_route(id, &stitching);
+            routes.extend(stitching);
             Some(routes)
         })
         .collect()
+}
+
+/// Beside each pair of vias where `routes`, `pair`'s, change layers, a via
+/// of the net whose planes and pours cover most of their layers there, two
+/// at least: the current returning under the pair follows it from layer to
+/// layer. Outside the positive net's via, else outside the negative's, else
+/// ahead or behind the pair, wherever it first fits in `layout`.
+fn stitching_vias(
+    design: &Design,
+    rules: &ConstraintSet,
+    layout: &impl LayoutAccess,
+    routes: &Routes,
+    pair: DifferentialPair,
+) -> Vec<Via> {
+    let of = |net: NetId| routes.vias.iter().filter(move |v| v.net == net);
+    let mut stitching = Vec::new();
+    for (positive, negative) in of(pair.positive).zip(of(pair.negative)) {
+        let kind = design.via_kind(positive.kind);
+        let poured = |net: NetId, at: Point| {
+            (kind.copper.iter())
+                .filter(|c| {
+                    design.planes.iter().any(|plane| {
+                        plane.net == net
+                            && plane.layer == c.layer
+                            && plane.outline.contains(at)
+                            && !plane.holes.iter().any(|hole| hole.contains(at))
+                    })
+                })
+                .count()
+        };
+        let middle = midpoint(positive.position, negative.position);
+        let reference = (design.planes.iter().map(|plane| plane.net))
+            .filter(|&net| net != pair.positive && net != pair.negative)
+            .map(|net| (poured(net, middle), std::cmp::Reverse(net)))
+            .filter(|&(layers, _)| layers >= 2)
+            .max()
+            .map(|(_, std::cmp::Reverse(net))| net);
+        let Some(reference) = reference else {
+            continue;
+        };
+        let diameter = (kind.copper.iter())
+            .map(|c| {
+                let bounds = c.shape.bounds();
+                (bounds.max.x - bounds.min.x).max(bounds.max.y - bounds.min.y)
+            })
+            .max()
+            .unwrap_or(0);
+        let apart = f64::from(diameter + rules.clearance(Some(reference), Some(pair.positive)) + 1);
+        let across = unit(negative.position, positive.position);
+        let along = left(across);
+        let half = positive.position.distance(negative.position) as f64 / 2.0;
+        let beside = (apart * apart - half * half).max(0.0).sqrt();
+        let candidates = [
+            moved(positive.position, across, apart),
+            moved(negative.position, across, -apart),
+            moved(middle, along, beside),
+            moved(middle, along, -beside),
+        ];
+        let found = candidates.into_iter().find_map(|at| {
+            let via = Via {
+                net: reference,
+                kind: positive.kind,
+                position: at,
+            };
+            (poured(reference, at) >= 2 && layout.is_via_clear(&via)).then_some(via)
+        });
+        stitching.extend(found);
+    }
+    stitching
 }
 
 /// A pair at one end: the positive net's pad and the negative's, and half

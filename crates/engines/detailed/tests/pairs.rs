@@ -256,3 +256,29 @@ fn a_pair_with_no_room_to_fan_in_at_one_end_stops_short_of_its_pads_there() {
     }
     assert_clear(&design, &routes);
 }
+
+#[test]
+fn a_pair_changing_layers_over_a_ground_pour_takes_a_ground_via_beside_its_vias() {
+    let wall = Shape::Polygon(Polygon::rectangle(Rect {
+        min: at(9.0, 0.0),
+        max: at(11.0, 10.0),
+    }));
+    let design = pair_board_with_vias()
+        .keepout(wall, Some(0), KeepoutScope::Everything)
+        .plane("GND", 0, at(0.0, 0.0), at(20.0, 10.0))
+        .plane("GND", 1, at(0.0, 0.0), at(20.0, 10.0))
+        .build();
+    let routes = route_pair(&design);
+    let gnd = design.net_named("GND");
+    let (stitching, pair): (Vec<_>, Vec<_>) = routes.vias.iter().partition(|v| v.net == gnd);
+    assert_eq!((pair.len(), stitching.len()), (4, 2), "{routes:?}");
+    for via in &stitching {
+        let nearest = pair.iter().map(|p| p.position.distance(via.position)).min();
+        assert!(
+            nearest < Some(mm(1.5).into()),
+            "{via:?} far from the pair's vias"
+        );
+    }
+    assert_coupled(&design, &routes);
+    assert_legal(&design, &routes);
+}

@@ -41,13 +41,15 @@ TokenBoard's USB pair, USB_D_P and USB_D_N in the USB class (0.2 mm tracks, 0.25
 
 | TokenBoard | Before | **Coupled** |
 | --- | --- | --- |
-| USB_D_P within 0.45 ± 0.05 mm of USB_D_N | 0 mm | **72 mm of 91 (79 %)** |
-| USB_D_N within 0.45 ± 0.05 mm of USB_D_P | 0 mm | **71 mm of 90 (79 %)** |
+| USB_D_P within 0.45 ± 0.05 mm of USB_D_N | 0 mm of 164 | **138 mm of 155 (89 %)** |
+| USB_D_N within 0.45 ± 0.05 mm of USB_D_P | 0 mm of 181 | **137 mm of 153 (90 %)** |
 | Vias | 241 | **238** |
 | Track | 12,538 mm | 12,607 mm |
 | Nets complete, rules broken | 241 of 241, none | 241 of 241, none |
 
-Coupled: U3 to J2 (31 mm) and J2 to R6 and R7 (100 mm), the latter through two pairs of vias. Not coupled: J1's two rows (A6 to B6, A7 to B7) and U3's pins on its two sides, connections between pins of one part.
+Coupled: U3 to J2 (31 mm) and J2 to R6 and R7 (100 mm), the latter through two pairs of vias. Not coupled: J1's two rows (A6 to B6, A7 to B7) and U3's pins on its two sides, connections between pins of one part. (First reported as 72 and 71 mm, 79 %: the script that measured it missed some of the tracks of boards KiCad writes one item to a line.)
+
+Where the pair changes layers over pours, a via of the net that pours the most of the via's layers there, two at least, now stands beside the pair's vias, so the current returning under the pair follows it from layer to layer. On TokenBoard, GND poured on the front, back and first inner copper: a GND via 0.75 mm beside each of the two pairs of vias, no rule broken.
 
 ## Hops taken out by moving what they pass (M5, TRX-76)
 
