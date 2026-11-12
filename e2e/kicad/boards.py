@@ -114,6 +114,17 @@ class BoardBuilder:
             footprint.Flip(footprint.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
         return footprint
 
+    def track(self, net: str, layer, points, width: float = 0.25) -> None:
+        """Wiring of `net` along `points`, a segment for each step, as a designer draws it."""
+        for start, end in zip(points, points[1:]):
+            segment = pcbnew.PCB_TRACK(self.board)
+            segment.SetStart(pcbnew.VECTOR2I(MM(start[0]), MM(start[1])))
+            segment.SetEnd(pcbnew.VECTOR2I(MM(end[0]), MM(end[1])))
+            segment.SetWidth(MM(width))
+            segment.SetLayer(layer)
+            segment.SetNet(self._net(net))
+            self.board.Add(segment)
+
     def zone(self, net: str, layer, corners) -> None:
         """A copper zone of `net`, left unfilled, as a board fresh from a script is."""
         zone = pcbnew.ZONE(self.board)
@@ -169,14 +180,26 @@ def placements() -> pcbnew.BOARD:
     return builder.board
 
 
-def crossing() -> pcbnew.BOARD:
-    """Two nets whose straight lines cross: one must change layers."""
+def crossing_pads() -> BoardBuilder:
     builder = BoardBuilder(30, 30)
     pad = lambda net: [Smd("1", 0, 0, 1.2, 1.2, net)]
     builder.footprint("TP1", 5, 15, pad("ACROSS"))
     builder.footprint("TP2", 25, 15, pad("ACROSS"))
     builder.footprint("TP3", 15, 5, pad("DOWN"))
     builder.footprint("TP4", 15, 25, pad("DOWN"))
+    return builder
+
+
+def crossing() -> pcbnew.BOARD:
+    """Two nets whose straight lines cross: one must change layers."""
+    return crossing_pads().board
+
+
+def detour() -> pcbnew.BOARD:
+    """The crossing board with DOWN wired by hand round a detour, which the
+    Optimise button pulls straight, and ACROSS left for routing."""
+    builder = crossing_pads()
+    builder.track("DOWN", pcbnew.F_Cu, [(15, 5), (20, 10), (20, 20), (15, 25)])
     return builder.board
 
 
@@ -388,6 +411,7 @@ RECIPES = {
     "keyboard-tkl": Recipe(keyboard_tkl, track=0.2, clearance=0.15),
     "placements": Recipe(placements),
     "crossing": Recipe(crossing),
+    "detour": Recipe(detour),
     "ground-pour": Recipe(ground_pour),
     "inner-plane": Recipe(inner_plane),
     "isolation": Recipe(

@@ -16,6 +16,7 @@ use traxide_contracts::Design;
 const DEFAULT_RECIPES: &[&str] = &[
     "placements",
     "crossing",
+    "detour",
     "ground-pour",
     "inner-plane",
     "matrix-3x4",
@@ -189,9 +190,58 @@ fn through_running_kicad(
         ""
     };
     let selected = route_the_nets_of_a_selected_footprint(&running, &before, judgement.zones > 0)?;
+    let optimised = if before.existing.tracks.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {}",
+            optimise_its_own_wiring(kicad, root, &running, &before, recipe)?
+        )
+    };
     Ok(format!(
-        "routed in a running KiCad by its traxide button ({} track segments, {} vias{zones}), clean, and gone after {undos}; {selected}",
+        "routed in a running KiCad by its traxide button ({} track segments, {} vias{zones}), clean, and gone after {undos}; {selected}{optimised}",
         judgement.tracks, judgement.vias
+    ))
+}
+
+/// Presses *Optimise* on a board that came with wiring and requires less
+/// track, no rule broken in KiCad's DRC, and one undo to take it back.
+fn optimise_its_own_wiring(
+    kicad: &Kicad,
+    root: &Path,
+    running: &RunningKicad,
+    before: &Design,
+    recipe: &str,
+) -> Result<String> {
+    let length = |design: &Design| -> f64 {
+        let nanometres: i64 = (design.existing.tracks.iter())
+            .flat_map(|track| track.path.windows(2))
+            .map(|w| w[0].distance(w[1]))
+            .sum();
+        nanometres as f64 / 1e6
+    };
+    running.route_with_the_plugin(Button::Optimise, before)?;
+    let optimised = running.design()?;
+    ensure!(
+        length(&optimised) < length(before),
+        "the Optimise button left {:.1} mm of track where there was {:.1} mm",
+        length(&optimised),
+        length(before)
+    );
+    running.save()?;
+    let judgement = kicad.judge_saved_in_kicad(root, &running.project, recipe)?;
+    ensure!(
+        judgement.violations.is_empty(),
+        "optimised in KiCad and saved, KiCad's DRC found {} violations:\n  {}",
+        judgement.violations.len(),
+        judgement.violations.join("\n  ")
+    );
+    running.undo()?;
+    wait_until_back_to(running, before, "one undo")?;
+    Ok(format!(
+        "its own wiring pulled tight by the Optimise button, {:.1} mm of track instead of {:.1} mm, clean, and gone after one undo",
+        length(&optimised),
+        length(before)
     ))
 }
 
@@ -220,6 +270,11 @@ fn route_the_nets_of_a_selected_footprint(
         .filter(|pad| pad.part() == footprint)
         .filter_map(|pad| pad.net)
         .collect();
+    // Wired already, as on a board that comes with wiring, its nets would
+    // leave the board as it is.
+    if (before.existing.tracks.iter()).any(|track| nets.contains(&track.net)) {
+        return Ok(format!("{footprint}, selected, has its nets wired already"));
+    }
     running.route_with_the_plugin(Button::RouteSelectedNets, before)?;
     let routed = running.design()?;
     let added = (routed.existing.tracks.iter())

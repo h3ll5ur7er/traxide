@@ -25,6 +25,7 @@ const ROUTING: Duration = Duration::from_secs(120);
 pub enum Button {
     RouteBoard,
     RouteSelectedNets,
+    Optimise,
 }
 
 impl Button {
@@ -34,6 +35,7 @@ impl Button {
         match self {
             Self::RouteBoard => [27, 127, 90],
             Self::RouteSelectedNets => [27, 90, 127],
+            Self::Optimise => [176, 106, 26],
         }
     }
 
@@ -43,6 +45,7 @@ impl Button {
         match self {
             Self::RouteBoard => "traxide",
             Self::RouteSelectedNets => "traxide-selecte",
+            Self::Optimise => "traxide-optimis",
         }
     }
 }
@@ -168,6 +171,8 @@ impl RunningKicad {
 
     /// Presses the plugin's `button`, as a designer would, and waits until the
     /// plugin has changed the board `before` and finished.
+    /// Presses the plugin's `button` and waits until it is done and the
+    /// board is no longer `before`.
     pub fn route_with_the_plugin(&self, button: Button, before: &Design) -> Result<()> {
         let display = self.display()?;
         let (x, y) = self.find_the_button(&display, button)?;
@@ -187,7 +192,7 @@ impl RunningKicad {
             }
             ensure!(
                 started.elapsed() < ROUTING,
-                "the plugin did not route the board within {} s of pressing its button",
+                "the board was the same {} s after pressing the plugin's {button:?} button",
                 ROUTING.as_secs()
             );
             std::thread::sleep(Duration::from_millis(300));
@@ -324,6 +329,15 @@ fn write_configuration(image: &str, config: &Path) -> Result<()> {
         r#"{
   "api": { "enable_server": true },
   "do_not_show_again": { "data_collection_prompt": true, "update_check_prompt": true }
+}
+"#,
+    )?;
+    // The window as large as the virtual screen: in KiCad's default, 1280 by
+    // 720, the toolbar hides all but one of the plugin's three buttons.
+    std::fs::write(
+        seed.join("pcbnew.json"),
+        r#"{
+  "window": { "maximized": true, "pos_x": 0, "pos_y": 0, "size_x": 1600, "size_y": 1000, "display": 0 }
 }
 "#,
     )?;
