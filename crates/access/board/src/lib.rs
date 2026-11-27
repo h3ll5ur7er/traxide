@@ -147,18 +147,7 @@ pub fn store_routes(
                 )?
                 .ok_or_else(|| BoardError::Changed { path: board.into() })?,
             };
-            // KiCad finds a board's rules in the files of the same name.
-            for (extension, rules) in [
-                (PROJECT, &beside.project),
-                (CUSTOM_RULES, &beside.custom_rules),
-            ] {
-                let copy = path.with_extension(extension);
-                if let Some(rules) = rules
-                    && copy != board.with_extension(extension)
-                {
-                    write(&copy, rules)?;
-                }
-            }
+            beside.copy_rules_beside(board, path)?;
             (routed.text, routed.has_copper_zones)
         }
         _ => {
@@ -172,6 +161,38 @@ pub fn store_routes(
     Ok(Stored {
         zones_refilled: false,
         zones_to_refill,
+    })
+}
+
+/// Stores `routes` into `path` in place of the unlocked segments and vias of
+/// the board `design` was read from, `board`: what an optimiser made of
+/// them. Arcs and the copper the designer locked stay. Into the running
+/// KiCad as one commit, one undo; into a copy of a KiCad board file
+/// otherwise, with its rules beside it. Refuses if `board` changed since.
+pub fn store_in_place_of_wiring(
+    path: &Path,
+    board: &Path,
+    design: &Design,
+    routes: &Routes,
+) -> Result<Stored, BoardError> {
+    if is_running_kicad(path) && is_running_kicad(board) {
+        return kicad::ipc::replace_wiring(&kicad::ipc::Environment::of_process(), design, routes);
+    }
+    if (extension(path), extension(board)) != (Some("kicad_pcb"), Some("kicad_pcb")) {
+        return Err(BoardError::UnsupportedFormat {
+            path: path.into(),
+            expected: "a KiCad board (.kicad_pcb) for a KiCad board, or the running KiCad for its board",
+        });
+    }
+    let beside = Beside::of(board)?;
+    let text = read(board)?;
+    let optimised = kicad::replace_wiring(&text, beside.rule_files(), design, routes)?
+        .ok_or_else(|| BoardError::Changed { path: board.into() })?;
+    beside.copy_rules_beside(board, path)?;
+    write(path, &optimised.text)?;
+    Ok(Stored {
+        zones_refilled: false,
+        zones_to_refill: optimised.has_copper_zones,
     })
 }
 
@@ -234,6 +255,20 @@ impl Beside {
             project: text(PROJECT)?,
             custom_rules: text(CUSTOM_RULES)?,
         })
+    }
+
+    /// Writes the rules beside `path`, a copy of `board`: KiCad finds a
+    /// board's rules in the files of the same name.
+    fn copy_rules_beside(&self, board: &Path, path: &Path) -> Result<(), BoardError> {
+        for (extension, rules) in [(PROJECT, &self.project), (CUSTOM_RULES, &self.custom_rules)] {
+            let copy = path.with_extension(extension);
+            if let Some(rules) = rules
+                && copy != board.with_extension(extension)
+            {
+                write(&copy, rules)?;
+            }
+        }
+        Ok(())
     }
 
     fn rule_files(&self) -> kicad::RuleFiles<'_> {

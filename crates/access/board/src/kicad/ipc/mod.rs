@@ -22,18 +22,21 @@ use messages::board::commands::{
 };
 use messages::board::types::Net;
 use messages::common::commands::{
-    BeginCommit, BeginCommitResponse, CommitAction, CreateItems, CreateItemsResponse, EndCommit,
-    EndCommitResponse, GetSelection, ItemStatusCode, SaveDocumentToString, SavedDocumentResponse,
-    SelectionResponse,
+    BeginCommit, BeginCommitResponse, CommitAction, CreateItems, CreateItemsResponse, DeleteItems,
+    DeleteItemsResponse, EndCommit, EndCommitResponse, GetSelection, ItemStatusCode,
+    SaveDocumentToString, SavedDocumentResponse, SelectionResponse,
 };
 use messages::common::project::{NetClass, NetClassType};
 use messages::common::types::document_specifier::Identifier;
-use messages::common::types::{Distance, DocumentSpecifier, ItemHeader, ItemRequestStatus};
+use messages::common::types::{Distance, DocumentSpecifier, ItemHeader, ItemRequestStatus, Kiid};
 use std::path::PathBuf;
 use traxide_contracts::{Design, Routes};
 
 /// What KiCad's undo menu calls the routes: *Edit → Undo traxide: route*.
 const COMMIT_MESSAGE: &str = "traxide: route";
+
+/// What it calls optimised wiring: *Edit → Undo traxide: optimise*.
+const OPTIMISED_MESSAGE: &str = "traxide: optimise";
 
 /// The design of the board open in KiCad's PCB editor.
 pub(crate) fn load_design(environment: &Environment) -> Result<Design, BoardError> {
@@ -110,6 +113,83 @@ pub(crate) fn store_routes(
     })
 }
 
+/// Stores `routes` in place of the unlocked segments and vias of the board
+/// open in KiCad, which `design` was read from, as one commit: the old ones
+/// deleted, the new ones created, one undo. Arcs and locked copper stay.
+/// Refuses if the board is no longer the one `design` was read from.
+pub(crate) fn replace_wiring(
+    environment: &Environment,
+    design: &Design,
+    routes: &Routes,
+) -> Result<Stored, BoardError> {
+    let mut kicad = Kicad::connect(environment)?;
+    let document = kicad.open_board()?;
+    let (board, text) = read_with_text(&mut kicad, &document, environment)?;
+    if board.design != *design {
+        return Err(BoardError::Changed {
+            path: PathBuf::from(RUNNING_KICAD),
+        });
+    }
+    let replaced = super::unlocked_segment_and_via_ids(&text);
+    let items = items::of(&board, routes)?;
+    if replaced.is_empty() && items.is_empty() {
+        return Ok(Stored::default());
+    }
+    let commit: BeginCommitResponse = kicad.call(&BeginCommit::default())?;
+    let done = delete(&mut kicad, &document, replaced).and_then(|()| {
+        if items.is_empty() {
+            Ok(())
+        } else {
+            create(&mut kicad, &document, items)
+        }
+    });
+    let ended = kicad.call::<_, EndCommitResponse>(&EndCommit {
+        id: commit.id,
+        action: if done.is_ok() {
+            CommitAction::CmaCommit
+        } else {
+            CommitAction::CmaDrop
+        }
+        .into(),
+        message: OPTIMISED_MESSAGE.into(),
+        header: None,
+    });
+    done?;
+    ended?;
+    if board.has_copper_zones {
+        refill_zones(&mut kicad, &document)?;
+    }
+    Ok(Stored {
+        zones_refilled: board.has_copper_zones,
+        zones_to_refill: false,
+    })
+}
+
+fn delete(
+    kicad: &mut Kicad,
+    document: &DocumentSpecifier,
+    ids: Vec<String>,
+) -> Result<(), BoardError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let deleted: DeleteItemsResponse = kicad.call(&DeleteItems {
+        header: Some(ItemHeader {
+            document: Some(document.clone()),
+            ..ItemHeader::default()
+        }),
+        item_ids: ids.into_iter().map(|value| Kiid { value }).collect(),
+    })?;
+    if deleted.status == i32::from(ItemRequestStatus::IrsOk) {
+        Ok(())
+    } else {
+        Err(BoardError::Kicad(format!(
+            "the board refused to delete its old tracks ({})",
+            deleted.status
+        )))
+    }
+}
+
 fn refill_zones(kicad: &mut Kicad, document: &DocumentSpecifier) -> Result<(), BoardError> {
     kicad
         .call::<_, ()>(&RefillZones {
@@ -161,6 +241,15 @@ fn read(
     document: &DocumentSpecifier,
     environment: &Environment,
 ) -> Result<Board, BoardError> {
+    read_with_text(kicad, document, environment).map(|(board, _)| board)
+}
+
+/// The board open in KiCad, and the text of its file as KiCad hands it over.
+fn read_with_text(
+    kicad: &mut Kicad,
+    document: &DocumentSpecifier,
+    environment: &Environment,
+) -> Result<(Board, String), BoardError> {
     let saved: SavedDocumentResponse = kicad.call(&SaveDocumentToString {
         document: Some(document.clone()),
     })?;
@@ -174,7 +263,8 @@ fn read(
     let rule_files = rule_files(document, environment)?;
     let mut project = Project::read(rule_files.project.as_deref())?;
     project.follow(&live_classes(&nets.nets, &classes));
-    board::read_with(&saved.contents, project, rule_files.custom_rules.as_deref())
+    let board = board::read_with(&saved.contents, project, rule_files.custom_rules.as_deref())?;
+    Ok((board, saved.contents))
 }
 
 /// The project's rule files: in the folder KiCad passes to plugins, else in
@@ -338,7 +428,7 @@ mod tests {
         GetOpenDocumentsResponse, ItemCreationResult, ItemStatus,
     };
     use super::messages::common::project::NetClassBoardSettings;
-    use super::messages::common::types::{DocumentType, Kiid, ProjectSpecifier, Vector2};
+    use super::messages::common::types::{DocumentType, ProjectSpecifier, Vector2};
     use super::messages::common::{ApiRequest, ApiResponse, ApiResponseStatus, ApiStatusCode};
     use super::messages::{Any, Packed};
     use super::*;
@@ -517,6 +607,17 @@ mod tests {
                     format!("EndCommit {action} {}", asked.message);
                 ok(&EndCommitResponse {})
             }
+            "DeleteItems" => {
+                let asked: DeleteItems = message.to().expect("the request");
+                let ids: Vec<String> = asked.item_ids.iter().map(|id| id.value.clone()).collect();
+                *state.received.last_mut().expect("just received") =
+                    format!("DeleteItems {}", ids.join(" "));
+                ok(&DeleteItemsResponse {
+                    header: None,
+                    status: ItemRequestStatus::IrsOk.into(),
+                    deleted_items: Vec::new(),
+                })
+            }
             "RefillZones" => ok(&()),
             "GetSelection" => ok(&SelectionResponse {
                 items: state.selection.clone(),
@@ -679,6 +780,46 @@ mod tests {
         assert_eq!(
             received.last().map(String::as_str),
             Some("EndCommit drop traxide: route")
+        );
+    }
+
+    #[test]
+    fn optimised_wiring_replaces_the_unlocked_segments_and_vias_in_one_commit() {
+        let text = board_text();
+        let end = text.trim_end().rfind(')').expect("the board's end");
+        let wired = format!(
+            "{}\t(segment (start 10 10) (end 12 10) (width 0.25) (layer \"F.Cu\") (net \"ROW0\") \
+             (uuid \"aaaaaaaa-0000-4000-8000-000000000001\"))\n\
+             \t(segment (start 10 12) (end 12 12) (width 0.25) (locked yes) (layer \"F.Cu\") \
+             (net \"ROW0\") (uuid \"bbbbbbbb-0000-4000-8000-000000000002\"))\n)\n",
+            &text[..end]
+        );
+        let copy = tempfile::tempdir().expect("a temporary folder");
+        for extension in ["kicad_pro", "kicad_dru"] {
+            let rules = fixtures().join(format!("{BOARD}.{extension}"));
+            if rules.exists() {
+                std::fs::copy(&rules, copy.path().join(format!("{BOARD}.{extension}")))
+                    .expect("copied");
+            }
+        }
+        let board = copy.path().join(format!("{BOARD}.kicad_pcb"));
+        std::fs::write(&board, &wired).expect("written");
+        let design = crate::load_design(&board).expect("a valid board");
+        let (_folder, environment, state) = fake_kicad(|state| state.board = wired);
+        replace_wiring(&environment, &design, &some_routes()).expect("stored");
+        let received = received(&state);
+        let commit = received
+            .iter()
+            .position(|r| r == "BeginCommit")
+            .expect("a commit");
+        assert_eq!(
+            received[commit..],
+            [
+                "BeginCommit",
+                "DeleteItems aaaaaaaa-0000-4000-8000-000000000001",
+                "CreateItems",
+                "EndCommit push traxide: optimise"
+            ]
         );
     }
 

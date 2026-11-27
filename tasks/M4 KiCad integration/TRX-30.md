@@ -2,7 +2,8 @@
 id: TRX-30
 title: Read and write KiCad board files in Board Access
 type: feature
-status: todo
+status: in-progress
+assignee: claude
 priority: high
 labels: [board-access, kicad]
 estimate: 5

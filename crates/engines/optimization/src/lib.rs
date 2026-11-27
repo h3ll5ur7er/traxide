@@ -1,8 +1,38 @@
 //! Optimization Engine: makes routed copper shorter and simpler without
 //! changing what it connects (docs/Architecture/Routing-pipeline.md#optimise).
 
+mod chain;
+
 use traxide_contracts::geometry::{Point, Segment};
-use traxide_contracts::{ConnectionId, LayoutAccess, Routes, Track, Via};
+use traxide_contracts::{ConnectionId, Design, LayoutAccess, Routes, Track, Via};
+
+/// A board's own wiring, `routes`, which its program stores a segment at a
+/// time, shorter and simpler: the segments meeting end to end where nothing
+/// else joins their net are chained into tracks and pulled tight
+/// (`pull_tight`). Arcs stay as they are, each piece of two points a track
+/// of its own, which pull-tight cannot change and whose ends it keeps
+/// joined. `layout` holds the board but none of `routes`.
+pub fn optimise(design: &Design, routes: &Routes, layout: &mut impl LayoutAccess) -> Routes {
+    let (segments, arcs): (Vec<Track>, Vec<Track>) =
+        (routes.tracks.iter().cloned()).partition(|track| track.path.len() == 2);
+    let arc_pieces: Vec<Track> = (arcs.iter())
+        .flat_map(|arc| {
+            arc.path.windows(2).map(|w| Track {
+                path: vec![w[0], w[1]],
+                ..arc.clone()
+            })
+        })
+        .collect();
+    let mut tracks = chain::chained(design, &segments, &arc_pieces, &routes.vias);
+    tracks.extend(arc_pieces);
+    pull_tight(
+        &Routes {
+            tracks,
+            vias: routes.vias.clone(),
+        },
+        layout,
+    )
+}
 
 /// Measured on the corpus, a second pass saves some 3 % of the corners the
 /// first one left, a third and fourth little more.

@@ -6,10 +6,41 @@ use std::ops::Range;
 /// for a router to route again. Zones and the copper the designer locked
 /// stay; the rest of the text is unchanged.
 pub fn without_unlocked_wiring(board: &str) -> String {
+    without(board, &["segment", "arc", "via"])
+}
+
+/// The board file without its unlocked segments and vias, the wiring an
+/// optimiser replaces; arcs stay, as it leaves them as they are.
+pub fn without_unlocked_segments_and_vias(board: &str) -> String {
+    without(board, &["segment", "via"])
+}
+
+/// The ids of the board's unlocked segments and vias, in the order the file
+/// lists them.
+pub fn unlocked_segment_and_via_ids(board: &str) -> Vec<String> {
+    (elements(board).into_iter())
+        .map(|item| &board[item])
+        .filter(|item| is_unlocked(item, &["segment", "via"]))
+        .filter_map(|item| {
+            elements(item).into_iter().find_map(|part| {
+                let words: Vec<&str> = (elements(&item[part.clone()]).into_iter())
+                    .map(|w| &item[part.start + w.start..part.start + w.end])
+                    .collect();
+                match words.as_slice() {
+                    ["uuid", id] => Some(id.trim_matches('"').to_owned()),
+                    _ => None,
+                }
+            })
+        })
+        .collect()
+}
+
+/// The board file without its unlocked items of `kinds`.
+fn without(board: &str, kinds: &[&str]) -> String {
     let mut kept = String::with_capacity(board.len());
     let mut from = 0;
     for item in elements(board) {
-        if is_unlocked_copper(&board[item.clone()]) {
+        if is_unlocked(&board[item.clone()], kinds) {
             let indented = board[..item.start].trim_end_matches([' ', '\t']).len();
             kept.push_str(&board[from..indented.max(from)]);
             let rest = &board[item.end..];
@@ -24,10 +55,11 @@ pub fn without_unlocked_wiring(board: &str) -> String {
     kept
 }
 
-fn is_unlocked_copper(item: &str) -> bool {
+/// Whether `item` is one of `kinds` and not locked.
+fn is_unlocked(item: &str, kinds: &[&str]) -> bool {
     let parts = elements(item);
     let keyword = parts.first().map(|k| &item[k.clone()]);
-    matches!(keyword, Some("segment" | "arc" | "via"))
+    keyword.is_some_and(|keyword| kinds.contains(&keyword))
         && !parts.iter().any(|part| is_locked(&item[part.clone()]))
 }
 
@@ -124,6 +156,25 @@ mod tests {
             \t(via locked (at 1 2) (net \"ROW1\"))\n\
             \t(zone (net \"GND\") (polygon (pts (xy 0 0) (xy 9 0) (xy 9 9))))\n)\n"
         );
+    }
+
+    #[test]
+    fn segments_and_vias_go_but_arcs_stay_when_the_wiring_is_optimised() {
+        let stripped = without_unlocked_segments_and_vias(ROUTED);
+        assert!(!stripped.contains("(end 3 4)\n"), "{stripped}");
+        assert!(!stripped.contains("(at 5 6)"), "{stripped}");
+        assert!(stripped.contains("(arc"), "{stripped}");
+        assert!(stripped.contains("(locked yes)"), "{stripped}");
+    }
+
+    #[test]
+    fn names_the_ids_of_the_unlocked_segments_and_vias() {
+        let board = "(kicad_pcb\n\
+            \t(segment (start 1 2) (end 3 4) (net \"A\") (uuid \"aa-1\"))\n\
+            \t(segment (start 1 2) (end 3 4) (locked yes) (net \"A\") (uuid \"bb-2\"))\n\
+            \t(arc (start 1 2) (mid 2 3) (end 3 4) (net \"A\") (uuid \"cc-3\"))\n\
+            \t(via (at 5 6) (net \"A\") (uuid \"dd-4\"))\n)\n";
+        assert_eq!(unlocked_segment_and_via_ids(board), ["aa-1", "dd-4"]);
     }
 
     #[test]

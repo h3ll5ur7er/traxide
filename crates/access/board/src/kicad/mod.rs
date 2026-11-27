@@ -11,7 +11,9 @@ mod sexpr;
 mod unlocked;
 mod write;
 
-pub use unlocked::without_unlocked_wiring;
+pub use unlocked::{
+    unlocked_segment_and_via_ids, without_unlocked_segments_and_vias, without_unlocked_wiring,
+};
 
 use crate::BoardError;
 use traxide_contracts::{Design, Routes};
@@ -36,6 +38,27 @@ pub struct WithRoutes {
     pub text: String,
     /// Whether the board has zones of copper, whose fills are now out of date.
     pub has_copper_zones: bool,
+}
+
+/// The board file `board` with `routes` in place of its unlocked segments
+/// and vias, which an optimiser made of them; arcs and locked copper stay.
+/// `None` if `board` is no longer the board `design` was read from.
+pub fn replace_wiring(
+    board: &str,
+    rules: RuleFiles,
+    design: &Design,
+    routes: &Routes,
+) -> Result<Option<WithRoutes>, BoardError> {
+    let read = board::read(board, rules.project, rules.custom_rules)?;
+    if read.design != *design {
+        return Ok(None);
+    }
+    let without = without_unlocked_segments_and_vias(board);
+    let stripped = board::read(&without, rules.project, rules.custom_rules)?;
+    Ok(Some(WithRoutes {
+        text: write::with_routes(&without, &stripped, routes),
+        has_copper_zones: read.has_copper_zones,
+    }))
 }
 
 /// The board file `board` with `routes` added, which were routed on `design`;

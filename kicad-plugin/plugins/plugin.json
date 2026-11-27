@@ -24,6 +24,16 @@
       "entrypoint": "traxide-selected",
       "icons-light": ["icon-selected.png"],
       "icons-dark": ["icon-selected-dark.png"]
+    },
+    {
+      "identifier": "optimise",
+      "name": "Optimise",
+      "description": "Pull the board's unlocked tracks tight with traxide: shorter, fewer corners, nothing coming apart",
+      "show-button": true,
+      "scopes": ["pcb"],
+      "entrypoint": "traxide-optimise",
+      "icons-light": ["icon-optimise.png"],
+      "icons-dark": ["icon-optimise-dark.png"]
     }
   ]
 }

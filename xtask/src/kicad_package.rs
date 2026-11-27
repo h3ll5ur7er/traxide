@@ -198,6 +198,7 @@ mod tests {
                         "Route selected nets",
                         format!("traxide-selected{extension}").as_str()
                     ),
+                    ("Optimise", format!("traxide-optimise{extension}").as_str()),
                 ]
             );
             for (_, entry_point) in buttons {
@@ -243,7 +244,7 @@ mod tests {
     fn traxide_in_the_package_is_executable() {
         use std::os::unix::fs::PermissionsExt;
         let folder = assembled(Platform::Linux);
-        for entry_point in ["traxide", "traxide-selected"] {
+        for entry_point in ["traxide", "traxide-selected", "traxide-optimise"] {
             let mode = std::fs::metadata(folder.path().join("package/plugins").join(entry_point))
                 .expect("traxide in the package")
                 .permissions()

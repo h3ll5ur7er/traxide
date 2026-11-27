@@ -90,6 +90,8 @@ The job names the nets to route and marks the rest as locked. Board Access loads
 
 The Routing Manager skips planning, global and detailed routing: load, compile rules, build the layout from the existing routes, optimise, verify, store. Verification guards the optimiser: if a pass would add a violation, the manager keeps the previous routes.
 
+Built ([[TRX-63]]): `traxide optimise BOARD.kicad_pcb`, `traxide optimise --kicad`, and the plugin's *Optimise* button. The board's unlocked segments, chained where nothing else joins their net (no via, pad or branch), are pulled tight; arcs, locked copper and the tracks of differential pairs stay as they are. The result is stored only where it changes something and breaks no rule the board did not break: into a copy `BOARD.optimised.kicad_pcb`, or into KiCad as one commit, *traxide: optimise*, that deletes the old segments and vias by their ids and creates the new.
+
 ## UC5: Check a board
 
 ```mermaid

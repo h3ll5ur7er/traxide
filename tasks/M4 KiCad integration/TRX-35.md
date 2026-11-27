@@ -2,7 +2,8 @@
 id: TRX-35
 title: Release static binaries for six targets
 type: chore
-status: todo
+status: review
+assignee: claude
 priority: high
 labels: [release, ci]
 estimate: 2
