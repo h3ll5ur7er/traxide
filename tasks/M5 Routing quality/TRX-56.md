@@ -98,4 +98,20 @@ Done: `Router::route_plan` routes a board a second time where rip-up leaves conn
 - [x] The corpus routes every board with the 90 s negotiation limit that [[TRX-64]] gives KiCad projects, so that the second attempt cannot push a board past the 120 s timeout, and the baseline raised: 13 boards gain, TokenBoard completes all 241 nets; Issue283 completes 38 to 41 of 58 within the limit instead of 44 without one, as main does within it ([[Benchmarks#a-second-attempt-in-rounds-where-rip-up-falls-short-m5-trx-56]])
 - [x] The gate notes rather than fails fewer nets on a board routed against the clock (taking the negotiation limit in the baseline or now): on CI, Mars-64, Issue326, Issue208 and Issue289-VGA routed 2 to 9 nets fewer than the local baseline within the limit, while Issue219 routed 36 more and Issue283 6 more, on the same commit
 
+Tried in November 2026 on f480a8c: rip-up giving up after one round without a new most-routed (`STALLED_ROUNDS` 1) instead of two, to leave the second attempt more of the time limit. Not built: it is as good, not better.
+
+- Over the corpus (120 s timeout, 90 s negotiation), 52 boards complete instead of 51 (Issue029) and 9 nets more out of 8877. The boards that complete within the limit route the same nets with the same vias, except Issue034 (59 vias instead of 69).
+- Eight time-limited boards gain 22 nets, six lose 13; repeated twice each, the gains and losses do not hold:
+
+  | Board (connections) | Stall after one round | Stall after two (today) |
+  | --- | --- | --- |
+  | Issue289-FHT-8086 (665) | 551, 552 | **555, 555** |
+  | Issue208 (422) | 225, 224 | **227, 230** |
+  | Issue103-Unrouted (702) | **596, 599** | 593, 595 |
+  | Issue145-smoothieboard (582) | **577, 577** | 574, 574 |
+  | Issue029 (91) | **91, 91**, 144 vias | 88, 88, 103 vias |
+
+- 4083 against 4079 connections in all, within the run-to-run spread of a few connections on these boards. Issue029 completes, but with 41 more vias.
+- So the number of rounds rip-up may stall is not what limits these boards; a stopping rule needs a better signal than a count.
+
 **Depends on:** [[TRX-54]], [[TRX-55]]: both remove failures that otherwise look like congestion.
